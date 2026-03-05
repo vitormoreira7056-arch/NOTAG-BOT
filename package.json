@@ -1,15 +1,16 @@
 {
-  "name": "nodejs",
+  "name": "guild-bot",
   "version": "1.0.0",
-  "description": "",
+  "description": "Bot de gerenciamento de guild Albion Online",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node index.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
   "dependencies": {
-    "@types/node": "^22.13.11"
+    "discord.js": "^14.14.1",
+    "dotenv": "^16.3.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
