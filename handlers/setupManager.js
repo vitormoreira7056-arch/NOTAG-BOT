@@ -13,6 +13,7 @@ class SetupManager {
     this.rolesChecked = [];
     this.deletedChannels = [];
     this.deletedCategories = [];
+    this.deletedRoles = [];
     this.errors = [];
   }
 
@@ -289,12 +290,6 @@ class SetupManager {
       }
     }
 
-    // Canal criar-evento: Caller e ADM podem criar
-    if (channelName.includes('criar-evento')) {
-      // Já está coberto pelas permissões de ADM/Staff acima
-      // Caller terá permissão específica quando criarmos o handler de eventos
-    }
-
     return permissions;
   }
 
@@ -311,13 +306,6 @@ class SetupManager {
             permissions: this.getRolePermissions(roleName),
             reason: 'Setup inicial do bot'
           });
-
-          // Se for Convidado, setar como cargo padrão do servidor (opcional)
-          if (roleName === 'Convidado') {
-            // Nota: Não é possível setar como cargo padrão via API diretamente,
-            // isso deve ser feito manualmente nas configurações do servidor
-            console.log(`⚠️ Cargo ${roleName} criado. Configure-o como cargo padrão em Configurações do Servidor > Cargos.`);
-          }
 
           this.rolesChecked.push(`${roleName} (novo)`);
           console.log(`✅ Cargo criado: ${roleName}`);
@@ -373,8 +361,9 @@ class SetupManager {
   }
 
   async uninstall() {
-    console.log('🗑️ Iniciando desinstalação...');
+    console.log('🗑️ Iniciando desinstalação completa...');
 
+    // 1. Deletar canais primeiro
     const structure = this.getServerStructure();
     const channelsToDelete = [];
     const categoriesToDelete = [];
@@ -399,7 +388,7 @@ class SetupManager {
       }
     }
 
-    // Deletar canais primeiro
+    // Deletar canais
     for (const channel of channelsToDelete) {
       try {
         await channel.delete('Desinstalação do bot');
@@ -411,7 +400,7 @@ class SetupManager {
       }
     }
 
-    // Depois deletar categorias
+    // Deletar categorias
     for (const category of categoriesToDelete) {
       try {
         await category.delete('Desinstalação do bot');
@@ -423,14 +412,38 @@ class SetupManager {
       }
     }
 
-    // Nota: Não deletamos os cargos na desinstalação por segurança
-    // Evita perder configurações de permissões de usuários existentes
+    // 2. Deletar cargos
+    const rolesToDelete = this.getRequiredRoles();
+
+    for (const roleName of rolesToDelete) {
+      try {
+        const role = this.guild.roles.cache.find(r => r.name === roleName);
+
+        if (role) {
+          // Verificar se não é o cargo @everyone (proteção extra)
+          if (role.id === this.guild.id) {
+            console.log(`⏭️ Pulando cargo @everyone`);
+            continue;
+          }
+
+          await role.delete('Desinstalação do bot');
+          this.deletedRoles.push(roleName);
+          console.log(`🗑️ Cargo deletado: ${roleName}`);
+        } else {
+          console.log(`⚠️ Cargo não encontrado: ${roleName}`);
+        }
+      } catch (error) {
+        console.error(`❌ Erro ao deletar cargo ${roleName}:`, error);
+        this.errors.push(`Cargo ${roleName}: ${error.message}`);
+      }
+    }
 
     return {
       success: this.errors.length === 0,
-      message: `Desinstalação concluída!\n🗑️ ${this.deletedChannels.length} canais removidos\n📁 ${this.deletedCategories.length} categorias removidas`,
+      message: `Desinstalação concluída!\n🗑️ ${this.deletedChannels.length} canais removidos\n📁 ${this.deletedCategories.length} categorias removidas\n🎭 ${this.deletedRoles.length} cargos removidos`,
       deletedChannels: this.deletedChannels,
       deletedCategories: this.deletedCategories,
+      deletedRoles: this.deletedRoles,
       errors: this.errors
     };
   }
