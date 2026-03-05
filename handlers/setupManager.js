@@ -1,6 +1,10 @@
-const { 
-  ChannelType, 
-  PermissionFlagsBits 
+const {
+  ChannelType,
+  PermissionFlagsBits,
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle
 } = require('discord.js');
 
 class SetupManager {
@@ -95,7 +99,7 @@ class SetupManager {
   getRequiredRoles() {
     return [
       'ADM',
-      'Staff', 
+      'Staff',
       'Caller',
       'tesoureiro',
       'Recrutador',
@@ -142,7 +146,12 @@ class SetupManager {
 
         // Criar canais dentro da categoria
         for (const channelData of categoryData.channels) {
-          await this.createChannel(channelData, category);
+          const channel = await this.createChannel(channelData, category);
+
+          // Se for o canal de registro e foi criado agora, enviar painel automaticamente
+          if (channel && channelData.name === '📋╠registrar' && !this.existingChannels.includes(channelData.name)) {
+            await this.sendRegistrationPanel(channel);
+          }
         }
 
       } catch (error) {
@@ -160,6 +169,48 @@ class SetupManager {
       rolesChecked: this.rolesChecked,
       errors: this.errors
     };
+  }
+
+  // Método para enviar painel de registro
+  async sendRegistrationPanel(channel) {
+    try {
+      const embed = new EmbedBuilder()
+        .setTitle('🛡️ Bem-vindo à Guilda!')
+        .setDescription(
+          '> Olá, aventureiro! Para fazer parte da nossa guilda, você precisa se registrar.\n\n' +
+          '**Como funciona:**\n' +
+          '1️⃣ Clique no botão **Registrar** abaixo\n' +
+          '2️⃣ Preencha seus dados do Albion Online\n' +
+          '3️⃣ Selecione seu servidor e plataforma\n' +
+          '4️⃣ Aguarde a validação automática e aprovação da staff\n\n' +
+          '**Requisitos:**\n' +
+          '• Ter o jogo Albion Online\n' +
+          '• Informar seu nick exato do jogo\n' +
+          '• Estar na guilda (ou informar guilda atual)\n\n' +
+          '_Após o registro, nossa staff irá analisar e atribuir o cargo adequado._'
+        )
+        .setColor(0x3498DB)
+        .setFooter({ text: 'Sistema de Registro • Guild Bot' })
+        .setTimestamp();
+
+      const button = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('btn_abrir_registro')
+          .setLabel('📝 Registrar')
+          .setStyle(ButtonStyle.Success)
+          .setEmoji('✨')
+      );
+
+      await channel.send({
+        embeds: [embed],
+        components: [button]
+      });
+
+      console.log(`✅ Painel de registro enviado automaticamente em ${channel.name}`);
+    } catch (error) {
+      console.error('❌ Erro ao enviar painel de registro:', error);
+      this.errors.push(`Painel registro: ${error.message}`);
+    }
   }
 
   async createChannel(channelData, category) {
@@ -213,8 +264,8 @@ class SetupManager {
       permissions.push({
         id: admRole.id,
         allow: [
-          PermissionFlagsBits.ViewChannel, 
-          PermissionFlagsBits.SendMessages, 
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
           PermissionFlagsBits.ManageMessages,
           PermissionFlagsBits.ManageChannels,
           PermissionFlagsBits.Connect,
@@ -228,8 +279,8 @@ class SetupManager {
       permissions.push({
         id: staffRole.id,
         allow: [
-          PermissionFlagsBits.ViewChannel, 
-          PermissionFlagsBits.SendMessages, 
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
           PermissionFlagsBits.ManageMessages,
           PermissionFlagsBits.Connect,
           PermissionFlagsBits.Speak
@@ -274,15 +325,15 @@ class SetupManager {
     }
 
     // Canais financeiros: Tesoureiro tem acesso especial
-    if (channelName.includes('financeiro') || 
-        channelName.includes('depósitos') || 
+    if (channelName.includes('financeiro') ||
+        channelName.includes('depósitos') ||
         channelName.includes('logs-banco') ||
         channelName.includes('saldo-guilda')) {
       if (tesoureiroRole) {
         permissions.push({
           id: tesoureiroRole.id,
           allow: [
-            PermissionFlagsBits.ViewChannel, 
+            PermissionFlagsBits.ViewChannel,
             PermissionFlagsBits.SendMessages,
             PermissionFlagsBits.ManageMessages
           ]
@@ -322,20 +373,19 @@ class SetupManager {
 
   getRoleColor(roleName) {
     const colors = {
-      'ADM': 0xE74C3C,           // Vermelho (Admin)
-      'Staff': 0x9B59B6,         // Roxo (Moderação)
-      'Caller': 0xF1C40F,        // Amarelo/Ouro (Líder de evento)
-      'tesoureiro': 0x2ECC71,    // Verde (Dinheiro/tesouro)
-      'Recrutador': 0x3498DB,    // Azul (Recrutamento)
-      'Membro': 0x1ABC9C,        // Verde água (Membro oficial)
-      'Convidado': 0x95A5A6,     // Cinza (Visitante/Novo)
-      'Aliança': 0xE67E22        // Laranja (Aliados)
+      'ADM': 0xE74C3C,
+      'Staff': 0x9B59B6,
+      'Caller': 0xF1C40F,
+      'tesoureiro': 0x2ECC71,
+      'Recrutador': 0x3498DB,
+      'Membro': 0x1ABC9C,
+      'Convidado': 0x95A5A6,
+      'Aliança': 0xE67E22
     };
     return colors[roleName] || 0xFFFFFF;
   }
 
   getRolePermissions(roleName) {
-    // Permissões base para cargos específicos
     switch(roleName) {
       case 'ADM':
         return [PermissionFlagsBits.Administrator];
@@ -349,11 +399,11 @@ class SetupManager {
         ];
       case 'tesoureiro':
         return [
-          PermissionFlagsBits.ManageMessages // Para gerenciar canais financeiros
+          PermissionFlagsBits.ManageMessages
         ];
       case 'Recrutador':
         return [
-          PermissionFlagsBits.ManageMessages // Para aprovar registros
+          PermissionFlagsBits.ManageMessages
         ];
       default:
         return [];
@@ -368,7 +418,6 @@ class SetupManager {
     const channelsToDelete = [];
     const categoriesToDelete = [];
 
-    // Coletar todos os canais e categorias criados pelo bot
     for (const categoryData of structure) {
       const category = this.guild.channels.cache.find(
         c => c.name === categoryData.name && c.type === ChannelType.GuildCategory
@@ -376,7 +425,6 @@ class SetupManager {
       if (category) {
         categoriesToDelete.push(category);
 
-        // Coletar canais da categoria
         for (const channelData of categoryData.channels) {
           const channel = this.guild.channels.cache.find(
             c => c.name === channelData.name && c.parentId === category.id
@@ -388,7 +436,6 @@ class SetupManager {
       }
     }
 
-    // Deletar canais
     for (const channel of channelsToDelete) {
       try {
         await channel.delete('Desinstalação do bot');
@@ -400,7 +447,6 @@ class SetupManager {
       }
     }
 
-    // Deletar categorias
     for (const category of categoriesToDelete) {
       try {
         await category.delete('Desinstalação do bot');
@@ -420,7 +466,6 @@ class SetupManager {
         const role = this.guild.roles.cache.find(r => r.name === roleName);
 
         if (role) {
-          // Verificar se não é o cargo @everyone (proteção extra)
           if (role.id === this.guild.id) {
             console.log(`⏭️ Pulando cargo @everyone`);
             continue;

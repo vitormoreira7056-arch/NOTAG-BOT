@@ -12,13 +12,11 @@ const {
 const AlbionAPI = require('./albionApi');
 
 class RegistrationModal {
-  // Criar o modal de registro
   static createRegistrationModal() {
     const modal = new ModalBuilder()
       .setCustomId('modal_registro')
       .setTitle('📝 Registro de Novo Membro');
 
-    // Nick no jogo
     const nickInput = new TextInputBuilder()
       .setCustomId('reg_nick')
       .setLabel('🎮 Seu Nick no Albion Online')
@@ -28,7 +26,6 @@ class RegistrationModal {
       .setMaxLength(32)
       .setMinLength(2);
 
-    // Guilda atual
     const guildaInput = new TextInputBuilder()
       .setCustomId('reg_guilda')
       .setLabel('🏰 Guilda Atual (ou "Nenhuma")')
@@ -37,7 +34,6 @@ class RegistrationModal {
       .setRequired(true)
       .setMaxLength(50);
 
-    // Arma/Spec
     const armaInput = new TextInputBuilder()
       .setCustomId('reg_arma')
       .setLabel('⚔️ Arma Principal / Spec')
@@ -54,7 +50,6 @@ class RegistrationModal {
     return modal;
   }
 
-  // Criar select menu para servidor (será enviado como follow-up ou no modal via atualização)
   static createServerSelectMenu() {
     const select = new StringSelectMenuBuilder()
       .setCustomId('select_server_registro')
@@ -80,7 +75,6 @@ class RegistrationModal {
     return new ActionRowBuilder().addComponents(select);
   }
 
-  // Criar select menu para plataforma
   static createPlatformSelectMenu() {
     const select = new StringSelectMenuBuilder()
       .setCustomId('select_platform_registro')
@@ -106,7 +100,6 @@ class RegistrationModal {
     return new ActionRowBuilder().addComponents(select);
   }
 
-  // Processar o modal submission
   static async processRegistration(interaction, client) {
     try {
       await interaction.deferReply({ ephemeral: true });
@@ -115,15 +108,12 @@ class RegistrationModal {
       const guilda = interaction.fields.getTextInputValue('reg_guilda').trim();
       const arma = interaction.fields.getTextInputValue('reg_arma').trim();
 
-      // Verificar se já existe registro pendente para este usuário
       if (global.registrosPendentes?.has(interaction.user.id)) {
-        await interaction.editReply({
+        return await interaction.editReply({
           content: '❌ Você já tem um registro pendente! Aguarde a análise da staff.'
         });
-        return;
       }
 
-      // Armazenar dados temporariamente e pedir servidor/plataforma
       if (!global.registroTemp) global.registroTemp = new Map();
 
       global.registroTemp.set(interaction.user.id, {
@@ -133,7 +123,6 @@ class RegistrationModal {
         etapa: 'selecionar_servidor'
       });
 
-      // Enviar mensagem para selecionar servidor
       const embed = new EmbedBuilder()
         .setTitle('🌍 Selecione seu Servidor')
         .setDescription('Por favor, selecione o servidor onde você joga Albion Online:')
@@ -142,8 +131,7 @@ class RegistrationModal {
 
       await interaction.editReply({
         embeds: [embed],
-        components: [this.createServerSelectMenu()],
-        ephemeral: true
+        components: [this.createServerSelectMenu()]
       });
 
     } catch (error) {
@@ -154,86 +142,157 @@ class RegistrationModal {
     }
   }
 
-  // Processar seleção do servidor
   static async processServerSelect(interaction) {
-    const server = interaction.values[0];
-    const tempData = global.registroTemp?.get(interaction.user.id);
+    try {
+      await interaction.deferUpdate(); // Adicionar deferUpdate para evitar timeout
 
-    if (!tempData) {
-      return interaction.update({
-        content: '❌ Sessão expirada. Por favor, inicie o registro novamente.',
-        components: [],
-        embeds: []
+      const server = interaction.values[0];
+      const tempData = global.registroTemp?.get(interaction.user.id);
+
+      if (!tempData) {
+        return await interaction.editReply({
+          content: '❌ Sessão expirada. Por favor, inicie o registro novamente.',
+          components: [],
+          embeds: []
+        });
+      }
+
+      tempData.server = server;
+      tempData.etapa = 'selecionar_plataforma';
+      global.registroTemp.set(interaction.user.id, tempData);
+
+      const serverNames = {
+        'americas': '🌎 Américas',
+        'europe': '🌍 Europa',
+        'asia': '🌏 Ásia'
+      };
+
+      const embed = new EmbedBuilder()
+        .setTitle('💻 Selecione sua Plataforma')
+        .setDescription(`Servidor selecionado: ${serverNames[server]}\n\nAgora selecione em qual plataforma você joga:`)
+        .setColor(0x3498DB)
+        .setFooter({ text: 'Etapa 2/2 • Dados do Registro' });
+
+      await interaction.editReply({
+        embeds: [embed],
+        components: [this.createPlatformSelectMenu()]
       });
+
+    } catch (error) {
+      console.error('Erro em processServerSelect:', error);
+      // Tentar responder se ainda for possível
+      try {
+        if (!interaction.replied && !interaction.deferred) {
+          await interaction.reply({
+            content: '❌ Erro ao processar seleção. Tente novamente.',
+            ephemeral: true
+          });
+        }
+      } catch (e) {}
     }
-
-    tempData.server = server;
-    tempData.etapa = 'selecionar_plataforma';
-    global.registroTemp.set(interaction.user.id, tempData);
-
-    const serverNames = {
-      'americas': '🌎 Américas',
-      'europe': '🌍 Europa',
-      'asia': '🌏 Ásia'
-    };
-
-    const embed = new EmbedBuilder()
-      .setTitle('💻 Selecione sua Plataforma')
-      .setDescription(`Servidor selecionado: ${serverNames[server]}\n\nAgora selecione em qual plataforma você joga:`)
-      .setColor(0x3498DB)
-      .setFooter({ text: 'Etapa 2/2 • Dados do Registro' });
-
-    await interaction.update({
-      embeds: [embed],
-      components: [this.createPlatformSelectMenu()]
-    });
   }
 
-  // Processar seleção da plataforma e validar na API
   static async processPlatformSelect(interaction, client) {
-    const platform = interaction.values[0];
-    const tempData = global.registroTemp?.get(interaction.user.id);
+    try {
+      await interaction.deferUpdate(); // Adicionar deferUpdate para evitar timeout
 
-    if (!tempData) {
-      return interaction.update({
-        content: '❌ Sessão expirada. Por favor, inicie o registro novamente.',
+      const platform = interaction.values[0];
+      const tempData = global.registroTemp?.get(interaction.user.id);
+
+      if (!tempData) {
+        return await interaction.editReply({
+          content: '❌ Sessão expirada. Por favor, inicie o registro novamente.',
+          components: [],
+          embeds: []
+        });
+      }
+
+      await interaction.editReply({
+        content: '⏳ Validando dados na API do Albion Online... Isso pode levar alguns segundos.',
         components: [],
         embeds: []
       });
-    }
 
-    await interaction.update({
-      content: '⏳ Validando dados na API do Albion Online... Isso pode levar alguns segundos.',
-      components: [],
-      embeds: []
-    });
+      tempData.platform = platform;
+      const { nick, guilda, arma, server } = tempData;
 
-    tempData.platform = platform;
-    const { nick, guilda, arma, server } = tempData;
+      try {
+        const verification = await AlbionAPI.verifyPlayerGuild(nick, guilda, server);
 
-    try {
-      // Validar na API do Albion
-      const verification = await AlbionAPI.verifyPlayerGuild(nick, guilda, server);
+        if (!verification.valid) {
+          const errorEmbed = new EmbedBuilder()
+            .setTitle('❌ Validação Falhou')
+            .setDescription(verification.error)
+            .addFields(
+              { name: '🎮 Nick Informado', value: nick, inline: true },
+              { name: '🏰 Guilda Informada', value: guilda, inline: true },
+              { name: '🌍 Servidor', value: server, inline: true }
+            )
+            .setColor(0xE74C3C)
+            .setFooter({ text: 'Verifique os dados e tente novamente' });
 
-      if (!verification.valid) {
-        // Se falhou na validação, enviar embed de erro
-        const errorEmbed = new EmbedBuilder()
-          .setTitle('❌ Validação Falhou')
-          .setDescription(verification.error)
-          .addFields(
-            { name: '🎮 Nick Informado', value: nick, inline: true },
-            { name: '🏰 Guilda Informada', value: guilda, inline: true },
-            { name: '🌍 Servidor', value: server, inline: true }
-          )
-          .setColor(0xE74C3C)
-          .setFooter({ text: 'Verifique os dados e tente novamente' });
+          global.registroTemp.delete(interaction.user.id);
 
-        // Limpar temp data
+          return await interaction.editReply({
+            content: null,
+            embeds: [errorEmbed],
+            components: [
+              new ActionRowBuilder().addComponents(
+                new ButtonBuilder()
+                  .setCustomId('btn_tentar_novamente_registro')
+                  .setLabel('🔄 Tentar Novamente')
+                  .setStyle(ButtonStyle.Primary)
+              )
+            ]
+          });
+        }
+
+        const registroId = `reg_${Date.now()}_${interaction.user.id}`;
+        const registroData = {
+          id: registroId,
+          userId: interaction.user.id,
+          userTag: interaction.user.tag,
+          nick: nick,
+          nickDoJogo: nick,
+          guilda: guilda,
+          server: server,
+          platform: platform,
+          arma: arma,
+          albionData: verification.details,
+          status: 'pendente',
+          timestamp: Date.now()
+        };
+
+        if (!global.registrosPendentes) global.registrosPendentes = new Map();
+        global.registrosPendentes.set(interaction.user.id, registroData);
+
         global.registroTemp.delete(interaction.user.id);
 
-        return interaction.editReply({
+        await this.sendToApprovalChannel(interaction, registroData, client);
+
+        const successEmbed = new EmbedBuilder()
+          .setTitle('✅ Registro Enviado!')
+          .setDescription('Seu registro foi validado e enviado para análise da staff!')
+          .addFields(
+            { name: '🎮 Nick', value: nick, inline: true },
+            { name: '🏰 Guilda', value: guilda || 'Nenhuma', inline: true },
+            { name: '🌍 Servidor', value: server, inline: true },
+            { name: '💻 Plataforma', value: platform, inline: true },
+            { name: '⚔️ Arma/Spec', value: arma, inline: false }
+          )
+          .setColor(0x2ECC71)
+          .setFooter({ text: 'Você receberá uma DM quando for analisado' });
+
+        await interaction.editReply({
           content: null,
-          embeds: [errorEmbed],
+          embeds: [successEmbed],
+          components: []
+        });
+
+      } catch (error) {
+        console.error('Erro na validação:', error);
+        await interaction.editReply({
+          content: '❌ Erro ao validar dados na API do Albion. Tente novamente mais tarde.',
           components: [
             new ActionRowBuilder().addComponents(
               new ButtonBuilder()
@@ -241,145 +300,98 @@ class RegistrationModal {
                 .setLabel('🔄 Tentar Novamente')
                 .setStyle(ButtonStyle.Primary)
             )
-          ]
+          ],
+          embeds: []
         });
       }
 
-      // Validação OK - Criar registro pendente
-      const registroId = `reg_${Date.now()}_${interaction.user.id}`;
-      const registroData = {
-        id: registroId,
-        userId: interaction.user.id,
-        userTag: interaction.user.tag,
-        nick: nick,
-        nickDoJogo: nick, // Para compatibilidade com sistema de alteração de nickname
-        guilda: guilda,
-        server: server,
-        platform: platform,
-        arma: arma,
-        albionData: verification.details,
-        status: 'pendente',
-        timestamp: Date.now()
-      };
-
-      // Salvar no registro global
-      if (!global.registrosPendentes) global.registrosPendentes = new Map();
-      global.registrosPendentes.set(interaction.user.id, registroData);
-
-      // Limpar temp
-      global.registroTemp.delete(interaction.user.id);
-
-      // Enviar para canal de solicitação
-      await this.sendToApprovalChannel(interaction, registroData, client);
-
-      // Confirmar para o usuário
-      const successEmbed = new EmbedBuilder()
-        .setTitle('✅ Registro Enviado!')
-        .setDescription('Seu registro foi validado e enviado para análise da staff!')
-        .addFields(
-          { name: '🎮 Nick', value: nick, inline: true },
-          { name: '🏰 Guilda', value: guilda || 'Nenhuma', inline: true },
-          { name: '🌍 Servidor', value: server, inline: true },
-          { name: '💻 Plataforma', value: platform, inline: true },
-          { name: '⚔️ Arma/Spec', value: arma, inline: false }
-        )
-        .setColor(0x2ECC71)
-        .setFooter({ text: 'Você receberá uma DM quando for analisado' });
-
-      await interaction.editReply({
-        content: null,
-        embeds: [successEmbed],
-        components: []
-      });
-
     } catch (error) {
-      console.error('Erro na validação:', error);
-      await interaction.editReply({
-        content: '❌ Erro ao validar dados na API do Albion. Tente novamente mais tarde.',
-        components: [
-          new ActionRowBuilder().addComponents(
-            new ButtonBuilder()
-              .setCustomId('btn_tentar_novamente_registro')
-              .setLabel('🔄 Tentar Novamente')
-              .setStyle(ButtonStyle.Primary)
-          )
-        ]
-      });
+      console.error('Erro em processPlatformSelect:', error);
+      try {
+        if (!interaction.replied && !interaction.deferred) {
+          await interaction.reply({
+            content: '❌ Erro ao processar seleção. Tente novamente.',
+            ephemeral: true
+          });
+        }
+      } catch (e) {}
     }
   }
 
-  // Enviar embed para canal de aprovação
   static async sendToApprovalChannel(interaction, registroData, client) {
-    const guild = interaction.guild;
-    const canalSolicitacao = guild.channels.cache.find(
-      c => c.name === '📨╠solicitação-registro'
-    );
+    try {
+      const guild = interaction.guild;
+      const canalSolicitacao = guild.channels.cache.find(
+        c => c.name === '📨╠solicitação-registro'
+      );
 
-    if (!canalSolicitacao) {
-      throw new Error('Canal de solicitação de registro não encontrado!');
-    }
+      if (!canalSolicitacao) {
+        throw new Error('Canal de solicitação de registro não encontrado!');
+      }
 
-    const serverEmoji = {
-      'americas': '🌎',
-      'europe': '🌍',
-      'asia': '🌏'
-    };
+      const serverEmoji = {
+        'americas': '🌎',
+        'europe': '🌍',
+        'asia': '🌏'
+      };
 
-    const embed = new EmbedBuilder()
-      .setTitle('📝 Nova Solicitação de Registro')
-      .setDescription(`Registro de ${interaction.user}`)
-      .setColor(0xF39C12)
-      .setThumbnail(interaction.user.displayAvatarURL({ dynamic: true }))
-      .addFields(
-        { name: '👤 Usuário Discord', value: `${interaction.user} (\`${interaction.user.id}\`)`, inline: false },
-        { name: '🎮 Nick no Albion', value: `\`${registroData.nick}\``, inline: true },
-        { name: '🏰 Guilda Atual', value: registroData.guilda || 'Nenhuma', inline: true },
-        { name: '🌍 Servidor', value: `${serverEmoji[registroData.server]} ${registroData.server.toUpperCase()}`, inline: true },
-        { name: '💻 Plataforma', value: registroData.platform, inline: true },
-        { name: '⚔️ Arma/Spec', value: registroData.arma, inline: false }
-      )
-      .setFooter({ text: `ID do Registro: ${registroData.id}` })
-      .setTimestamp();
+      const embed = new EmbedBuilder()
+        .setTitle('📝 Nova Solicitação de Registro')
+        .setDescription(`Registro de ${interaction.user}`)
+        .setColor(0xF39C12)
+        .setThumbnail(interaction.user.displayAvatarURL({ dynamic: true }))
+        .addFields(
+          { name: '👤 Usuário Discord', value: `${interaction.user} (\`${interaction.user.id}\`)`, inline: false },
+          { name: '🎮 Nick no Albion', value: `\`${registroData.nick}\``, inline: true },
+          { name: '🏰 Guilda Atual', value: registroData.guilda || 'Nenhuma', inline: true },
+          { name: '🌍 Servidor', value: `${serverEmoji[registroData.server]} ${registroData.server.toUpperCase()}`, inline: true },
+          { name: '💻 Plataforma', value: registroData.platform, inline: true },
+          { name: '⚔️ Arma/Spec', value: registroData.arma, inline: false }
+        )
+        .setFooter({ text: `ID do Registro: ${registroData.id}` })
+        .setTimestamp();
 
-    // Se tiver dados da API, adicionar info de validação
-    if (registroData.albionData) {
-      embed.addFields({
-        name: '✅ Validação API',
-        value: `Jogador verificado na API do Albion\nGuilda atual: ${registroData.albionData.guildName || 'Sem guilda'}`,
-        inline: false
+      if (registroData.albionData) {
+        embed.addFields({
+          name: '✅ Validação API',
+          value: `Jogador verificado na API do Albion\nGuilda atual: ${registroData.albionData.guildName || 'Sem guilda'}`,
+          inline: false
+        });
+      }
+
+      const row1 = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`aprovar_membro_${registroData.id}`)
+          .setLabel('✅ Membro')
+          .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+          .setCustomId(`aprovar_alianca_${registroData.id}`)
+          .setLabel('🤝 Aliança')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId(`aprovar_convidado_${registroData.id}`)
+          .setLabel('👋 Convidado')
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId(`recusar_registro_${registroData.id}`)
+          .setLabel('❌ Recusar')
+          .setStyle(ButtonStyle.Danger)
+      );
+
+      const msg = await canalSolicitacao.send({
+        content: `📢 <@&${guild.roles.cache.find(r => r.name === 'Recrutador')?.id}> <@&${guild.roles.cache.find(r => r.name === 'ADM')?.id}> Nova solicitação de registro!`,
+        embeds: [embed],
+        components: [row1]
       });
+
+      registroData.messageId = msg.id;
+      registroData.channelId = msg.channel.id;
+      global.registrosPendentes.set(registroData.userId, registroData);
+
+    } catch (error) {
+      console.error('Erro ao enviar para canal de aprovação:', error);
+      throw error;
     }
-
-    // Botões de aprovação
-    const row1 = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`aprovar_membro_${registroData.id}`)
-        .setLabel('✅ Membro')
-        .setStyle(ButtonStyle.Success),
-      new ButtonBuilder()
-        .setCustomId(`aprovar_alianca_${registroData.id}`)
-        .setLabel('🤝 Aliança')
-        .setStyle(ButtonStyle.Primary),
-      new ButtonBuilder()
-        .setCustomId(`aprovar_convidado_${registroData.id}`)
-        .setLabel('👋 Convidado')
-        .setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder()
-        .setCustomId(`recusar_registro_${registroData.id}`)
-        .setLabel('❌ Recusar')
-        .setStyle(ButtonStyle.Danger)
-    );
-
-    const msg = await canalSolicitacao.send({
-      content: `📢 <@&${guild.roles.cache.find(r => r.name === 'Recrutador')?.id}> <@&${guild.roles.cache.find(r => r.name === 'ADM')?.id}> Nova solicitação de registro!`,
-      embeds: [embed],
-      components: [row1]
-    });
-
-    // Salvar ID da mensagem para referência
-    registroData.messageId = msg.id;
-    registroData.channelId = msg.channel.id;
-    global.registrosPendentes.set(registroData.userId, registroData);
   }
 }
 
