@@ -13,8 +13,8 @@ const Database = require('../utils/database');
 
 class XpHandler {
  constructor() {
- // Sistema de patentes baseado em Albion Online (50+ patentes)
- this.ranks = [
+  // Sistema de patentes baseado em Albion Online (50+ patentes)
+  this.ranks = [
    // Tier 1 - Iniciante
    { level: 1, name: 'Recruta', emoji: '⚪', color: 0x95A5A6, description: 'Novo aventureiro' },
    { level: 2, name: 'Aprendiz de Ferreiro', emoji: '🔨', color: 0x95A5A6, description: 'Aprendendo os fundamentos' },
@@ -91,10 +91,10 @@ class XpHandler {
    { level: 53, name: 'Onipotente', emoji: '💫', color: 0xFFFFFF, description: 'Todo-poderoso' },
    { level: 54, name: 'Onisciente', emoji: '📚', color: 0xFFFFFF, description: 'Sabe tudo' },
    { level: 55, name: 'Onipresente', emoji: '👁️', color: 0xFFFFFF, description: 'Está em todo lugar' }
- ];
+  ];
 
- // Condecorações/Insígnias (100+)
- this.insignias = [
+  // Condecorações/Insígnias (100+)
+  this.insignias = [
    // Insígnias de Evento
    { id: 'raid_avalon_1', name: 'Explorador de Avalon', emoji: '🔱', description: 'Participou de 1 Raid Avalon', tier: 'bronze' },
    { id: 'raid_avalon_10', name: 'Veterano de Avalon', emoji: '🔱', description: 'Participou de 10 Raids Avalon', tier: 'prata' },
@@ -237,298 +237,314 @@ class XpHandler {
    { id: 'arcane_master', name: 'Mestre Arcano', emoji: '🔮', description: '100 kills com arcano', tier: 'ouro' },
    { id: 'holy_master', name: 'Mestre Sagrado', emoji: '✨', description: '100 kills com sagrado', tier: 'ouro' },
    { id: 'curse_master', name: 'Mestre da Maldição', emoji: '💀', description: '100 kills com curse', tier: 'ouro' }
- ];
+  ];
+ }
+
+ // ========== Helper para valores seguros ==========
+ /**
+  * Formata um número para string localizada, retornando '0' se undefined/null
+  * @param {number} value - Valor a formatar
+  * @returns {string} Valor formatado ou '0'
+  */
+ formatSafeNumber(value) {
+  if (value === undefined || value === null || isNaN(value)) {
+   return '0';
+  }
+  return value.toLocaleString();
  }
 
  getRankByLevel(level) {
- // Se passar do nível 55, continua com o padrão do último rank mas aumenta o número
- if (level > 55) {
+  // Se passar do nível 55, continua com o padrão do último rank mas aumenta o número
+  if (level > 55) {
    const baseRank = this.ranks[this.ranks.length - 1];
    return {
-     ...baseRank,
-     level: level,
-     name: `${baseRank.name} +${level - 55}`,
-     description: `Nível transcendental ${level}`
+    ...baseRank,
+    level: level,
+    name: `${baseRank.name} +${level - 55}`,
+    description: `Nível transcendental ${level}`
    };
- }
- return this.ranks.find(r => r.level === level) || this.ranks[0];
+  }
+  return this.ranks.find(r => r.level === level) || this.ranks[0];
  }
 
  getXpForNextLevel(currentLevel) {
- // Fórmula de XP: cada nível precisa de mais 100 XP que o anterior
- // Nível 1: 100 XP
- // Nível 2: 200 XP
- // Nível 3: 300 XP...
- return currentLevel * 100;
+  // Fórmula de XP: cada nível precisa de mais 100 XP que o anterior
+  // Nível 1: 100 XP
+  // Nível 2: 200 XP
+  // Nível 3: 300 XP...
+  return currentLevel * 100;
  }
 
  async addXp(userId, amount, reason, guild, channel) {
-   try {
-     const user = Database.getUser(userId);
+  try {
+   const user = Database.getUser(userId);
 
-     // Inicializar XP se não existir
-     if (!user.xp) user.xp = 0;
-     if (!user.level) user.level = 1;
-     if (!user.totalXp) user.totalXp = 0;
-     if (!user.insignias) user.insignias = [];
+   // Inicializar XP se não existir
+   if (!user.xp) user.xp = 0;
+   if (!user.level) user.level = 1;
+   if (!user.totalXp) user.totalXp = 0;
+   if (!user.insignias) user.insignias = [];
 
-     const oldLevel = user.level;
-     user.xp += amount;
-     user.totalXp += amount;
+   const oldLevel = user.level;
+   user.xp += amount;
+   user.totalXp += amount;
 
-     // Verificar level up
-     let leveledUp = false;
-     while (user.xp >= this.getXpForNextLevel(user.level)) {
-       user.xp -= this.getXpForNextLevel(user.level);
-       user.level++;
-       leveledUp = true;
-     }
-
-     Database.updateUser(userId, user);
-
-     // Enviar log no canal log-xp
-     if (channel) {
-       await this.sendXpLog(channel, userId, amount, reason, user.level, leveledUp);
-     }
-
-     // Se upou de nível, enviar DM
-     if (leveledUp) {
-       await this.sendLevelUpDM(userId, oldLevel, user.level, guild);
-     }
-
-     return { success: true, leveledUp, newLevel: user.level };
-   } catch (error) {
-     console.error(`[XpHandler] Error adding XP:`, error);
-     return { success: false, error };
+   // Verificar level up
+   let leveledUp = false;
+   while (user.xp >= this.getXpForNextLevel(user.level)) {
+    user.xp -= this.getXpForNextLevel(user.level);
+    user.level++;
+    leveledUp = true;
    }
+
+   Database.updateUser(userId, user);
+
+   // Enviar log no canal log-xp
+   if (channel) {
+    await this.sendXpLog(channel, userId, amount, reason, user.level, leveledUp);
+   }
+
+   // Se upou de nível, enviar DM
+   if (leveledUp) {
+    await this.sendLevelUpDM(userId, oldLevel, user.level, guild);
+   }
+
+   return { success: true, leveledUp, newLevel: user.level };
+  } catch (error) {
+   console.error(`[XpHandler] Error adding XP:`, error);
+   return { success: false, error };
+  }
  }
 
  async sendXpLog(channel, userId, amount, reason, currentLevel, leveledUp) {
-   try {
-     const user = await global.client.users.fetch(userId).catch(() => null);
-     const rank = this.getRankByLevel(currentLevel);
+  try {
+   const user = await global.client.users.fetch(userId).catch(() => null);
+   const rank = this.getRankByLevel(currentLevel);
 
-     const embed = new EmbedBuilder()
-       .setTitle('📈 GANHO DE XP')
-       .setDescription(
-         `**Jogador:** <@${userId}> ${user ? `(${user.tag})` : ''}\n` +
-         `**XP Ganho:** \`+${amount} XP\`\n` +
-         `**Motivo:** ${reason}\n` +
-         `**Nível Atual:** \`${currentLevel}\` ${rank.emoji} ${rank.name}\n` +
-         `${leveledUp ? '🎉 **LEVEL UP!**' : ''}`
-       )
-       .setColor(rank.color)
-       .setThumbnail('https://i.imgur.com/5K9Q5ZK.png')
-       .setFooter({ text: 'Sistema de XP • NOTAG Bot' })
-       .setTimestamp();
+   const embed = new EmbedBuilder()
+    .setTitle('📈 GANHO DE XP')
+    .setDescription(
+     `**Jogador:** <@${userId}> ${user ? `(${user.tag})` : ''}\n` +
+     `**XP Ganho:** \`+${amount} XP\`\n` +
+     `**Motivo:** ${reason}\n` +
+     `**Nível Atual:** \`${currentLevel}\` ${rank.emoji} ${rank.name}\n` +
+     `${leveledUp ? '🎉 **LEVEL UP!**' : ''}`
+    )
+    .setColor(rank.color)
+    .setThumbnail('https://i.imgur.com/5K9Q5ZK.png')
+    .setFooter({ text: 'Sistema de XP • NOTAG Bot' })
+    .setTimestamp();
 
-     await channel.send({ embeds: [embed] });
-   } catch (error) {
-     console.error(`[XpHandler] Error sending XP log:`, error);
-   }
+   await channel.send({ embeds: [embed] });
+  } catch (error) {
+   console.error(`[XpHandler] Error sending XP log:`, error);
+  }
  }
 
  async sendLevelUpDM(userId, oldLevel, newLevel, guild) {
-   try {
-     const user = await global.client.users.fetch(userId);
-     const oldRank = this.getRankByLevel(oldLevel);
-     const newRank = this.getRankByLevel(newLevel);
+  try {
+   const user = await global.client.users.fetch(userId);
+   const oldRank = this.getRankByLevel(oldLevel);
+   const newRank = this.getRankByLevel(newLevel);
 
-     const embed = new EmbedBuilder()
-       .setTitle('🎉 LEVEL UP!')
-       .setDescription(
-         `🎊 **Parabéns! Você subiu de nível!**\n\n` +
-         `⬆️ **Nível ${oldLevel}** ${oldRank.emoji} → **Nível ${newLevel}** ${newRank.emoji}\n\n` +
-         `🏆 **Nova Patente:** ${newRank.name}\n` +
-         `📝 **Descrição:** ${newRank.description}\n\n` +
-         `💪 Continue participando de eventos para subir mais!`
-       )
-       .setColor(newRank.color)
-       .setThumbnail('https://i.imgur.com/5K9Q5ZK.png')
-       .setImage('https://i.imgur.com/JPepvGx.png')
-       .setFooter({ 
-         text: 'NOTAG Bot • Sistema de Progressão', 
-         iconURL: 'https://i.imgur.com/8QBYRrm.png' 
-       })
-       .setTimestamp();
+   const embed = new EmbedBuilder()
+    .setTitle('🎉 LEVEL UP!')
+    .setDescription(
+     `🎊 **Parabéns! Você subiu de nível!**\n\n` +
+     `⬆️ **Nível ${oldLevel}** ${oldRank.emoji} → **Nível ${newLevel}** ${newRank.emoji}\n\n` +
+     `🏆 **Nova Patente:** ${newRank.name}\n` +
+     `📝 **Descrição:** ${newRank.description}\n\n` +
+     `💪 Continue participando de eventos para subir mais!`
+    )
+    .setColor(newRank.color)
+    .setThumbnail('https://i.imgur.com/5K9Q5ZK.png')
+    .setImage('https://i.imgur.com/JPepvGx.png')
+    .setFooter({
+     text: 'NOTAG Bot • Sistema de Progressão',
+     iconURL: 'https://i.imgur.com/8QBYRrm.png'
+    })
+    .setTimestamp();
 
-     // Se mudou de tier (cor diferente), adicionar destaque especial
-     if (oldRank.color !== newRank.color) {
-       embed.addFields({
-         name: '🌟 PROMOÇÃO DE TIER!',
-         value: `Você foi promovido de tier! Novos desafios o aguardam!`,
-         inline: false
-       });
-     }
-
-     await user.send({ embeds: [embed] });
-   } catch (error) {
-     console.error(`[XpHandler] Error sending level up DM:`, error);
+   // Se mudou de tier (cor diferente), adicionar destaque especial
+   if (oldRank.color !== newRank.color) {
+    embed.addFields({
+     name: '🌟 PROMOÇÃO DE TIER!',
+     value: `Você foi promovido de tier! Novos desafios o aguardam!`,
+     inline: false
+    });
    }
+
+   await user.send({ embeds: [embed] });
+  } catch (error) {
+   console.error(`[XpHandler] Error sending level up DM:`, error);
+  }
  }
 
  calculateEventXp(participationPercent, eventType = 'normal') {
-   // Base XP por participação
-   let baseXp = 0;
+  // Base XP por participação
+  let baseXp = 0;
 
-   if (participationPercent >= 100) baseXp = 60;
-   else if (participationPercent >= 90) baseXp = 55;
-   else if (participationPercent >= 80) baseXp = 50;
-   else if (participationPercent >= 70) baseXp = 48;
-   else if (participationPercent >= 60) baseXp = 45;
-   else if (participationPercent >= 50) baseXp = 45;
-   else if (participationPercent >= 40) baseXp = 40;
-   else if (participationPercent >= 30) baseXp = 35;
-   else if (participationPercent >= 20) baseXp = 30;
-   else if (participationPercent >= 10) baseXp = 20;
-   else baseXp = 10;
+  if (participationPercent >= 100) baseXp = 60;
+  else if (participationPercent >= 90) baseXp = 55;
+  else if (participationPercent >= 80) baseXp = 50;
+  else if (participationPercent >= 70) baseXp = 48;
+  else if (participationPercent >= 60) baseXp = 45;
+  else if (participationPercent >= 50) baseXp = 45;
+  else if (participationPercent >= 40) baseXp = 40;
+  else if (participationPercent >= 30) baseXp = 35;
+  else if (participationPercent >= 20) baseXp = 30;
+  else if (participationPercent >= 10) baseXp = 20;
+  else baseXp = 10;
 
-   // Multiplicadores por tipo de evento
-   const multipliers = {
-     'normal': 1,
-     'avalon': 2.5,
-     'gank': 1.8,
-     'cta': 2.0,
-     'dungeon': 1.2,
-     'gathering': 1.0,
-     'crafting': 1.0,
-     'pvp': 1.5,
-     'zvz': 2.2,
-     'hellgate': 1.8,
-     'corrupted': 1.6,
-     'faction': 1.4,
-     'orb_green': 1, // 40 XP base
-     'orb_blue': 1, // 90 XP base
-     'orb_purple': 1, // 200 XP base
-     'orb_gold': 1 // 500 XP base
-   };
+  // Multiplicadores por tipo de evento
+  const multipliers = {
+   'normal': 1,
+   'avalon': 2.5,
+   'gank': 1.8,
+   'cta': 2.0,
+   'dungeon': 1.2,
+   'gathering': 1.0,
+   'crafting': 1.0,
+   'pvp': 1.5,
+   'zvz': 2.2,
+   'hellgate': 1.8,
+   'corrupted': 1.6,
+   'faction': 1.4,
+   'orb_green': 1, // 40 XP base
+   'orb_blue': 1, // 90 XP base
+   'orb_purple': 1, // 200 XP base
+   'orb_gold': 1 // 500 XP base
+  };
 
-   const multiplier = multipliers[eventType] || 1;
-   return Math.floor(baseXp * multiplier);
+  const multiplier = multipliers[eventType] || 1;
+  return Math.floor(baseXp * multiplier);
  }
 
  async showProfile(userId, guild) {
-   try {
-     const user = Database.getUser(userId);
-     const discordUser = await global.client.users.fetch(userId);
-     const member = await guild.members.fetch(userId).catch(() => null);
+  try {
+   const user = Database.getUser(userId);
+   const discordUser = await global.client.users.fetch(userId);
+   const member = await guild.members.fetch(userId).catch(() => null);
 
-     const level = user.level || 1;
-     const xp = user.xp || 0;
-     const totalXp = user.totalXp || 0;
-     const rank = this.getRankByLevel(level);
-     const xpForNext = this.getXpForNextLevel(level);
-     const progressPercent = Math.floor((xp / xpForNext) * 100);
+   // Validação de segurança para valores numéricos
+   const level = user.level || 1;
+   const xp = user.xp || 0;
+   const totalXp = user.totalXp || 0;
+   const rank = this.getRankByLevel(level);
+   const xpForNext = this.getXpForNextLevel(level);
+   const progressPercent = Math.floor((xp / xpForNext) * 100);
+   const saldo = user.saldo || 0;
+   const eventosParticipados = user.eventosParticipados || 0;
 
-     // Criar barra de progresso
-     const progressBar = this.createProgressBar(progressPercent);
+   // Criar barra de progresso
+   const progressBar = this.createProgressBar(progressPercent);
 
-     const embed = new EmbedBuilder()
-       .setTitle(`👤 PERFIL DE ${member?.nickname || discordUser.username}`)
-       .setDescription(
-         `**📊 Nível ${level}** ${rank.emoji} **${rank.name}**\n` +
-         `\`${progressBar}\` **${progressPercent}%**\n` +
-         `**XP:** \`${xp.toLocaleString()}\` / \`${xpForNext.toLocaleString()}\`\n` +
-         `**XP Total:** \`${totalXp.toLocaleString()}\`\n\n` +
-         `**💰 Saldo:** \`${user.saldo.toLocaleString()}\`\n` +
-         `**🎯 Eventos:** \`${user.eventosParticipados || 0}\``
-       )
-       .setColor(rank.color)
-       .setThumbnail(discordUser.displayAvatarURL({ dynamic: true }))
-       .setFooter({ 
-         text: `ID: ${userId} • NOTAG Bot`, 
-         iconURL: 'https://i.imgur.com/8QBYRrm.png' 
-       })
-       .setTimestamp();
+   const embed = new EmbedBuilder()
+    .setTitle(`👤 PERFIL DE ${member?.nickname || discordUser.username}`)
+    .setDescription(
+     `**📊 Nível ${level}** ${rank.emoji} **${rank.name}**\n` +
+     `\`${progressBar}\` **${progressPercent}%**\n` +
+     `**XP:** \`${this.formatSafeNumber(xp)}\` / \`${this.formatSafeNumber(xpForNext)}\`\n` +
+     `**XP Total:** \`${this.formatSafeNumber(totalXp)}\`\n\n` +
+     `**💰 Saldo:** \`${this.formatSafeNumber(saldo)}\`\n` +
+     `**🎯 Eventos:** \`${eventosParticipados}\``
+    )
+    .setColor(rank.color)
+    .setThumbnail(discordUser.displayAvatarURL({ dynamic: true }))
+    .setFooter({
+     text: `ID: ${userId} • NOTAG Bot`,
+     iconURL: 'https://i.imgur.com/8QBYRrm.png'
+    })
+    .setTimestamp();
 
-     // Adicionar insígnias se tiver
-     if (user.insignias && user.insignias.length > 0) {
-       const insigniasText = user.insignias.map(id => {
-         const ins = this.insignias.find(i => i.id === id);
-         return ins ? `${ins.emoji} ${ins.name}` : id;
-       }).join(' • ');
+   // Adicionar insígnias se tiver
+   if (user.insignias && user.insignias.length > 0) {
+    const insigniasText = user.insignias.map(id => {
+     const ins = this.insignias.find(i => i.id === id);
+     return ins ? `${ins.emoji} ${ins.name}` : id;
+    }).join(' • ');
 
-       embed.addFields({
-         name: '🏅 Condecorações',
-         value: insigniasText || 'Nenhuma',
-         inline: false
-       });
-     }
-
-     return embed;
-   } catch (error) {
-     console.error(`[XpHandler] Error showing profile:`, error);
-     return null;
+    embed.addFields({
+     name: '🏅 Condecorações',
+     value: insigniasText || 'Nenhuma',
+     inline: false
+    });
    }
+
+   return embed;
+  } catch (error) {
+   console.error(`[XpHandler] Error showing profile:`, error);
+   return null;
+  }
  }
 
  createProgressBar(percent) {
-   const filled = Math.floor(percent / 10);
-   const empty = 10 - filled;
-   return '█'.repeat(filled) + '░'.repeat(empty);
+  const filled = Math.floor(percent / 10);
+  const empty = 10 - filled;
+  return '█'.repeat(filled) + '░'.repeat(empty);
  }
 
  async addInsignia(userId, insigniaId) {
-   try {
-     const user = Database.getUser(userId);
-     if (!user.insignias) user.insignias = [];
+  try {
+   const user = Database.getUser(userId);
+   if (!user.insignias) user.insignias = [];
 
-     // Verificar se já tem
-     if (user.insignias.includes(insigniaId)) {
-       return { success: false, alreadyHas: true };
-     }
-
-     const insignia = this.insignias.find(i => i.id === insigniaId);
-     if (!insignia) {
-       return { success: false, notFound: true };
-     }
-
-     user.insignias.push(insigniaId);
-     Database.updateUser(userId, user);
-
-     // Enviar DM sobre nova condecoração
-     await this.sendInsigniaDM(userId, insignia);
-
-     return { success: true, insignia };
-   } catch (error) {
-     console.error(`[XpHandler] Error adding insignia:`, error);
-     return { success: false, error };
+   // Verificar se já tem
+   if (user.insignias.includes(insigniaId)) {
+    return { success: false, alreadyHas: true };
    }
+
+   const insignia = this.insignias.find(i => i.id === insigniaId);
+   if (!insignia) {
+    return { success: false, notFound: true };
+   }
+
+   user.insignias.push(insigniaId);
+   Database.updateUser(userId, user);
+
+   // Enviar DM sobre nova condecoração
+   await this.sendInsigniaDM(userId, insignia);
+
+   return { success: true, insignia };
+  } catch (error) {
+   console.error(`[XpHandler] Error adding insignia:`, error);
+   return { success: false, error };
+  }
  }
 
  async sendInsigniaDM(userId, insignia) {
-   try {
-     const user = await global.client.users.fetch(userId);
+  try {
+   const user = await global.client.users.fetch(userId);
 
-     const tierColors = {
-       'bronze': 0xCD7F32,
-       'prata': 0xC0C0C0,
-       'ouro': 0xFFD700,
-       'platina': 0xE5E4E2,
-       'diamante': 0xB9F2FF
-     };
+   const tierColors = {
+    'bronze': 0xCD7F32,
+    'prata': 0xC0C0C0,
+    'ouro': 0xFFD700,
+    'platina': 0xE5E4E2,
+    'diamante': 0xB9F2FF
+   };
 
-     const embed = new EmbedBuilder()
-       .setTitle('🏅 NOVA CONDECORAÇÃO!')
-       .setDescription(
-         `🎊 **Parabéns! Você ganhou uma nova insígnia!**\n\n` +
-         `${insignia.emoji} **${insignia.name}**\n` +
-         `📝 ${insignia.description}\n` +
-         `💎 Tier: ${insignia.tier.toUpperCase()}\n\n` +
-         `Esta insígnia agora aparece no seu perfil!`
-       )
-       .setColor(tierColors[insignia.tier] || 0xFFD700)
-       .setThumbnail('https://i.imgur.com/5K9Q5ZK.png')
-       .setFooter({ 
-         text: 'NOTAG Bot • Sistema de Conquistas', 
-         iconURL: 'https://i.imgur.com/8QBYRrm.png' 
-       })
-       .setTimestamp();
+   const embed = new EmbedBuilder()
+    .setTitle('🏅 NOVA CONDECORAÇÃO!')
+    .setDescription(
+     `🎊 **Parabéns! Você ganhou uma nova insígnia!**\n\n` +
+     `${insignia.emoji} **${insignia.name}**\n` +
+     `📝 ${insignia.description}\n` +
+     `💎 Tier: ${insignia.tier.toUpperCase()}\n\n` +
+     `Esta insígnia agora aparece no seu perfil!`
+    )
+    .setColor(tierColors[insignia.tier] || 0xFFD700)
+    .setThumbnail('https://i.imgur.com/5K9Q5ZK.png')
+    .setFooter({
+     text: 'NOTAG Bot • Sistema de Conquistas',
+     iconURL: 'https://i.imgur.com/8QBYRrm.png'
+    })
+    .setTimestamp();
 
-     await user.send({ embeds: [embed] });
-   } catch (error) {
-     console.error(`[XpHandler] Error sending insignia DM:`, error);
-   }
+   await user.send({ embeds: [embed] });
+  } catch (error) {
+   console.error(`[XpHandler] Error sending insignia DM:`, error);
+  }
  }
 }
 
