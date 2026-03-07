@@ -15,6 +15,8 @@ const RegistrationModal = require('./handlers/registrationModal');
 const RegistrationActions = require('./handlers/registrationActions');
 const ConfigActions = require('./handlers/configActions');
 const GuildMemberRemoveHandler = require('./handlers/guildMemberRemove');
+const EventPanel = require('./handlers/eventPanel');
+const EventHandler = require('./handlers/eventHandler');
 
 // Criar cliente
 const client = new Client({
@@ -45,8 +47,9 @@ client.commands.set(desistalarCommand.data.name, desistalarCommand);
 global.registrosPendentes = new Map();
 global.registroTemp = new Map();
 global.guildConfig = new Map();
-global.blacklist = new Map(); // NOVO: Blacklist de nicks
-global.historicoRegistros = new Map(); // NOVO: Histórico de tentativas
+global.blacklist = new Map(); // Blacklist de nicks
+global.historicoRegistros = new Map(); // Histórico de tentativas
+global.activeEvents = new Map(); // Eventos ativos
 global.client = client; // Referência global para o client
 
 // Carregar dados persistidos (blacklist e histórico)
@@ -76,9 +79,10 @@ client.once(Events.ClientReady, async () => {
   console.log(`🤖 ID do Bot: ${client.user.id}`);
   console.log(`📅 Data de início: ${new Date().toLocaleString()}`);
 
-  // Inicializar sistema de registro (inclui auto-update do painel a cada 1h)
-  RegistrationActions.initialize();
-  console.log('📝 Sistema de registro inicializado');
+  // Inicializar sistemas
+  RegistrationActions.initialize(); // Sistema de registro (inclui auto-update do painel a cada 1h)
+  EventHandler.initialize(); // Sistema de eventos
+  console.log('📝 Sistemas inicializados: Registro + Eventos');
 
   // Registrar Slash Commands
   const commands = [
@@ -152,21 +156,19 @@ client.on(Events.InteractionCreate, async interaction => {
     if (interaction.isButton()) {
       const customId = interaction.customId;
 
-      // Sistema de Registro - Abrir Modal
+      // SISTEMA DE REGISTRO
       if (customId === 'btn_abrir_registro') {
         const modal = RegistrationModal.createRegistrationModal();
         await interaction.showModal(modal);
         return;
       }
 
-      // Tentar novamente após erro de validação
       if (customId === 'btn_tentar_novamente_registro') {
         const modal = RegistrationModal.createRegistrationModal();
         await interaction.showModal(modal);
         return;
       }
 
-      // Aprovações de Registro
       if (customId.startsWith('aprovar_membro_')) {
         const regId = customId.replace('aprovar_membro_', '');
         await RegistrationActions.approveAsMember(interaction, regId);
@@ -185,21 +187,83 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // Recusar Registro - Abre modal para motivo
       if (customId.startsWith('recusar_registro_')) {
         const regId = customId.replace('recusar_registro_', '');
         await RegistrationActions.handleRejectRegistration(interaction, regId);
         return;
       }
 
-      // NOVO: Adicionar à Blacklist
       if (customId.startsWith('blacklist_add_')) {
         const regId = customId.replace('blacklist_add_', '');
         await RegistrationActions.handleBlacklistAdd(interaction, regId);
         return;
       }
 
-      // Lista de membros - Atualizar
+      // SISTEMA DE EVENTOS - Painel Principal
+      if (customId === 'btn_criar_evento') {
+        const modal = EventPanel.createEventModal();
+        await interaction.showModal(modal);
+        return;
+      }
+
+      if (customId === 'btn_raid_avalon' || customId === 'btn_gank' || customId === 'btn_cta') {
+        await interaction.reply({
+          content: '🔒 Este recurso estará disponível em breve!',
+          ephemeral: true
+        });
+        return;
+      }
+
+      // SISTEMA DE EVENTOS - Ações do Evento
+      if (customId.startsWith('evt_participar_')) {
+        const eventId = customId.replace('evt_participar_', '');
+        await EventHandler.handleParticipar(interaction, eventId);
+        return;
+      }
+
+      if (customId.startsWith('evt_iniciar_')) {
+        const eventId = customId.replace('evt_iniciar_', '');
+        await EventHandler.handleIniciar(interaction, eventId);
+        return;
+      }
+
+      if (customId.startsWith('evt_pausar_')) {
+        const eventId = customId.replace('evt_pausar_', '');
+        await EventHandler.handlePausar(interaction, eventId);
+        return;
+      }
+
+      if (customId.startsWith('evt_pausar_global_')) {
+        const eventId = customId.replace('evt_pausar_global_', '');
+        await EventHandler.handlePausarGlobal(interaction, eventId, true);
+        return;
+      }
+
+      if (customId.startsWith('evt_retomar_global_')) {
+        const eventId = customId.replace('evt_retomar_global_', '');
+        await EventHandler.handlePausarGlobal(interaction, eventId, false);
+        return;
+      }
+
+      if (customId.startsWith('evt_trancar_')) {
+        const eventId = customId.replace('evt_trancar_', '');
+        await EventHandler.handleTrancar(interaction, eventId);
+        return;
+      }
+
+      if (customId.startsWith('evt_cancelar_')) {
+        const eventId = customId.replace('evt_cancelar_', '');
+        await EventHandler.handleCancelar(interaction, eventId);
+        return;
+      }
+
+      if (customId.startsWith('evt_finalizar_')) {
+        const eventId = customId.replace('evt_finalizar_', '');
+        await EventHandler.handleFinalizar(interaction, eventId);
+        return;
+      }
+
+      // LISTA DE MEMBROS
       if (customId === 'btn_atualizar_lista_membros') {
         await interaction.deferUpdate();
         const MemberListPanel = require('./handlers/memberListPanel');
@@ -207,7 +271,7 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // Configurações do Bot
+      // CONFIGURAÇÕES
       if (customId === 'config_taxa_guilda') {
         await ConfigActions.handleTaxaGuilda(interaction);
         return;
@@ -252,7 +316,7 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // Configurações - Taxa Guilda
+      // Configurações
       if (interaction.customId === 'select_taxa_guilda') {
         await ConfigActions.handleTaxaSelect(interaction);
         return;
@@ -261,9 +325,8 @@ client.on(Events.InteractionCreate, async interaction => {
 
     // ==================== MODALS ====================
     if (interaction.isModalSubmit()) {
-      // Sistema de Registro - Novo registro
+      // SISTEMA DE REGISTRO
       if (interaction.customId === 'modal_registro') {
-        // Verificar duplicidade antes de processar
         const nick = interaction.fields.getTextInputValue('reg_nick').trim();
         const erros = await RegistrationActions.checkExistingRegistration(
           interaction.guild,
@@ -283,21 +346,25 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // Recusa de registro com motivo
       if (interaction.customId.startsWith('modal_recusar_registro_')) {
         const regId = interaction.customId.replace('modal_recusar_registro_', '');
         await RegistrationActions.processRejectionWithReason(interaction, regId);
         return;
       }
 
-      // NOVO: Blacklist com motivo
       if (interaction.customId.startsWith('modal_blacklist_')) {
         const regId = interaction.customId.replace('modal_blacklist_', '');
         await RegistrationActions.processBlacklistAdd(interaction, regId);
         return;
       }
 
-      // Configurações - Registrar Guilda
+      // SISTEMA DE EVENTOS
+      if (interaction.customId === 'modal_criar_evento') {
+        await EventHandler.createEvent(interaction);
+        return;
+      }
+
+      // CONFIGURAÇÕES
       if (interaction.customId === 'modal_registrar_guilda') {
         await ConfigActions.processGuildRegistration(interaction);
         return;

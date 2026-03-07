@@ -178,6 +178,16 @@ class SetupManager {
               await MemberListPanel.sendPanel(channel, this.guild);
             }
           }
+
+          // NOVO: Se for o canal de criar evento, enviar painel de eventos
+          if (channel && channelData.name === '➕╠criar-evento') {
+            const existePainel = await this.checkExistingPanel(channel, 'CENTRAL DE EVENTOS');
+            if (!existePainel) {
+              const EventPanel = require('./eventPanel');
+              await EventPanel.sendPanel(channel);
+              console.log(`✅ Painel de eventos enviado em ${channel.name}`);
+            }
+          }
         }
 
       } catch (error) {
@@ -258,6 +268,16 @@ class SetupManager {
               } else {
                 // Atualizar painel existente
                 await MemberListPanel.updatePanel(existePainel, this.guild);
+              }
+            }
+
+            // NOVO: Verificar e recriar painel de eventos se necessário
+            if (channelData.name === '➕╠criar-evento') {
+              const EventPanel = require('./eventPanel');
+              const existePainel = await this.checkExistingPanel(channel, 'CENTRAL DE EVENTOS');
+              if (!existePainel) {
+                await EventPanel.sendPanel(channel);
+                console.log(`✅ Painel de eventos enviado/atualizado em ${channel.name}`);
               }
             }
           }
@@ -495,6 +515,15 @@ class SetupManager {
       }
     }
 
+    // Canal de criar evento: Todos podem ver e clicar no botão
+    if (channelName.includes('criar-evento')) {
+      const everyonePerms = permissions.find(p => p.id === this.guild.id);
+      if (everyonePerms) {
+        everyonePerms.deny = everyonePerms.deny.filter(d => d !== PermissionFlagsBits.SendMessages);
+        everyonePerms.allow.push(PermissionFlagsBits.UseApplicationCommands);
+      }
+    }
+
     // Canal de configurações: Apenas ADM
     if (channelName.includes('configurações')) {
       const everyonePerms = permissions.find(p => p.id === this.guild.id);
@@ -542,9 +571,9 @@ class SetupManager {
 
     // Canais financeiros: Tesoureiro tem acesso especial
     if (channelName.includes('financeiro') ||
-      channelName.includes('depósitos') ||
-      channelName.includes('logs-banco') ||
-      channelName.includes('saldo-guilda')) {
+        channelName.includes('depósitos') ||
+        channelName.includes('logs-banco') ||
+        channelName.includes('saldo-guilda')) {
       if (tesoureiroRole) {
         permissions.push({
           id: tesoureiroRole.id,
