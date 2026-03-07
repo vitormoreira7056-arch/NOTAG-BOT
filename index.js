@@ -22,6 +22,9 @@ const Database = require('./utils/database');
 const FinanceHandler = require('./handlers/financeHandler');
 const ConsultarSaldoHandler = require('./handlers/consultarSaldoHandler');
 const BalancePanelHandler = require('./handlers/balancePanelHandler');
+const BauSaleHandler = require('./handlers/bauSaleHandler');
+const EventStatsHandler = require('./handlers/eventStatsHandler');
+const MemberListPanel = require('./handlers/memberListPanel');
 
 // Criar cliente
 const client = new Client({
@@ -62,6 +65,7 @@ global.simulations = new Map();
 global.pendingWithdrawals = new Map();
 global.pendingLoans = new Map();
 global.pendingTransfers = new Map();
+global.pendingBauSales = new Map();
 global.client = client;
 
 // Carregar dados persistidos
@@ -333,7 +337,6 @@ client.on(Events.InteractionCreate, async interaction => {
  // LISTA DE MEMBROS
  if (customId === 'btn_atualizar_lista_membros') {
  await interaction.deferUpdate();
- const MemberListPanel = require('./handlers/memberListPanel');
  await MemberListPanel.updatePanel(interaction.message, interaction.guild);
  return;
  }
@@ -369,7 +372,7 @@ client.on(Events.InteractionCreate, async interaction => {
  return;
  }
 
- // 🎯 NOVO: Sistema Financeiro - Consultar Saldo
+ // Sistema Financeiro - Consultar Saldo
  if (customId === 'btn_consultar_saldo') {
  await ConsultarSaldoHandler.handleConsultarSaldo(interaction);
  return;
@@ -390,13 +393,13 @@ client.on(Events.InteractionCreate, async interaction => {
  return;
  }
 
- // 🎯 NOVO: Painel de Saldo da Guilda - Atualização manual
+ // Painel de Saldo da Guilda
  if (customId === 'btn_atualizar_saldo_guilda') {
  await BalancePanelHandler.handleManualUpdate(interaction);
  return;
  }
 
- // 🎯 NOVO: Confirmação de Saque (ADM/Staff)
+ // Confirmação de Saque
  if (customId.startsWith('fin_confirmar_saque_')) {
  const withdrawalId = customId.replace('fin_confirmar_saque_', '');
  await FinanceHandler.handleConfirmWithdrawal(interaction, withdrawalId);
@@ -409,7 +412,7 @@ client.on(Events.InteractionCreate, async interaction => {
  return;
  }
 
- // 🎯 NOVO: Confirmação de Empréstimo
+ // Confirmação de Empréstimo
  if (customId.startsWith('fin_confirmar_emprestimo_')) {
  const loanId = customId.replace('fin_confirmar_emprestimo_', '');
  await FinanceHandler.handleConfirmLoan(interaction, loanId);
@@ -422,7 +425,7 @@ client.on(Events.InteractionCreate, async interaction => {
  return;
  }
 
- // 🎯 NOVO: Aceitar/Recusar Transferência
+ // Aceitar/Recusar Transferência
  if (customId.startsWith('transf_aceitar_')) {
  const transferId = customId.replace('transf_aceitar_', '');
  await FinanceHandler.handleAcceptTransfer(interaction, transferId);
@@ -432,6 +435,30 @@ client.on(Events.InteractionCreate, async interaction => {
  if (customId.startsWith('transf_recusar_')) {
  const transferId = customId.replace('transf_recusar_', '');
  await FinanceHandler.handleRejectTransfer(interaction, transferId);
+ return;
+ }
+
+ // 🎯 NOVO: Venda de Baú
+ if (customId === 'btn_vender_bau') {
+ await BauSaleHandler.showLocationSelect(interaction);
+ return;
+ }
+
+ if (customId.startsWith('bau_comprar_')) {
+ const saleId = customId.replace('bau_comprar_', '');
+ await BauSaleHandler.handleComprar(interaction, saleId);
+ return;
+ }
+
+ if (customId.startsWith('bau_recusar_')) {
+ const saleId = customId.replace('bau_recusar_', '');
+ await BauSaleHandler.handleRecusar(interaction, saleId);
+ return;
+ }
+
+ // 🎯 NOVO: Estatísticas de Eventos
+ if (customId === 'btn_atualizar_stats_eventos') {
+ await EventStatsHandler.handleAtualizar(interaction);
  return;
  }
  }
@@ -450,6 +477,25 @@ client.on(Events.InteractionCreate, async interaction => {
 
  if (interaction.customId === 'select_taxa_guilda') {
  await ConfigActions.handleTaxaSelect(interaction);
+ return;
+ }
+
+ // 🎯 NOVO: Seleção de local do baú
+ if (interaction.customId === 'select_local_bau') {
+ const modal = BauSaleHandler.createBauSaleModal();
+ await interaction.showModal(modal);
+ return;
+ }
+
+ // 🎯 NOVO: Seleção de período de eventos
+ if (interaction.customId === 'select_periodo_eventos') {
+ await EventStatsHandler.handlePeriodSelect(interaction);
+ return;
+ }
+
+ // 🎯 NOVO: Filtro de cargo na lista de membros
+ if (interaction.customId === 'select_filtro_cargo') {
+ await MemberListPanel.handleFilterSelect(interaction);
  return;
  }
  }
@@ -510,7 +556,24 @@ client.on(Events.InteractionCreate, async interaction => {
  return;
  }
 
- // 🎯 NOVO: Modais Financeiros
+ if (customId === 'modal_taxa_guilda') {
+ await ConfigActions.handleTaxaSelect(interaction);
+ return;
+ }
+
+ // 🎯 NOVO: Taxas de Baú
+ if (customId === 'modal_taxas_bau') {
+ await ConfigActions.processTaxaBau(interaction);
+ return;
+ }
+
+ // 🎯 NOVO: Taxa de Empréstimo
+ if (customId === 'modal_taxa_emprestimo') {
+ await ConfigActions.processTaxaEmprestimo(interaction);
+ return;
+ }
+
+ // Modais Financeiros
  if (customId === 'modal_sacar_saldo') {
  await FinanceHandler.processWithdrawRequest(interaction);
  return;
@@ -529,6 +592,18 @@ client.on(Events.InteractionCreate, async interaction => {
  if (customId.startsWith('modal_motivo_recusa_saque_')) {
  const withdrawalId = interaction.customId.replace('modal_motivo_recusa_saque_', '');
  await FinanceHandler.processWithdrawalRejection(interaction, withdrawalId);
+ return;
+ }
+
+ // 🎯 NOVO: Venda de Baú
+ if (customId === 'modal_vender_bau') {
+ await BauSaleHandler.processSaleRequest(interaction);
+ return;
+ }
+
+ if (customId.startsWith('modal_motivo_recusa_bau_')) {
+ const saleId = interaction.customId.replace('modal_motivo_recusa_bau_', '');
+ await BauSaleHandler.processRejection(interaction, saleId);
  return;
  }
  }

@@ -1,341 +1,401 @@
-const { 
-  EmbedBuilder, 
-  ActionRowBuilder, 
-  ButtonBuilder, 
-  ButtonStyle,
-  PermissionFlagsBits
+const {
+ EmbedBuilder,
+ ActionRowBuilder,
+ ButtonBuilder,
+ ButtonStyle,
+ ModalBuilder,
+ TextInputBuilder,
+ TextInputStyle
 } = require('discord.js');
-const ConfigPanel = require('./configPanel');
-const SetupManager = require('./setupManager');
-const AlbionAPI = require('./albionApi');
 
 class ConfigActions {
-  // Verificar se é ADM
-  static isAdmin(member) {
-    return member.roles.cache.some(r => r.name === 'ADM') || 
-           member.permissions.has(PermissionFlagsBits.Administrator);
-  }
+ static async initialize() {
+ console.log('[ConfigActions] Initialized');
+ }
 
-  // Mostrar select de taxa
-  static async handleTaxaGuilda(interaction) {
-    if (!this.isAdmin(interaction.member)) {
-      return interaction.reply({
-        content: '❌ Apenas ADMs podem alterar configurações!',
-        ephemeral: true
-      });
-    }
+ // Handler para taxa da guilda
+ static async handleTaxaGuilda(interaction) {
+ try {
+ const modal = new ModalBuilder()
+ .setCustomId('modal_taxa_guilda')
+ .setTitle('💰 Configurar Taxa da Guilda');
 
-    await interaction.reply({
-      content: '💰 Selecione a taxa da guilda para eventos e divisões:',
-      components: [ConfigPanel.createTaxaSelectMenu()],
-      ephemeral: true
-    });
-  }
+ const taxaInput = new TextInputBuilder()
+ .setCustomId('valor_taxa')
+ .setLabel('Nova taxa da guilda (%)')
+ .setPlaceholder('Ex: 10')
+ .setStyle(TextInputStyle.Short)
+ .setRequired(true)
+ .setMaxLength(3);
 
-  // Processar seleção de taxa
-  static async handleTaxaSelect(interaction) {
-    if (!this.isAdmin(interaction.member)) {
-      return interaction.reply({
-        content: '❌ Apenas ADMs podem alterar configurações!',
-        ephemeral: true
-      });
-    }
+ modal.addComponents(new ActionRowBuilder().addComponents(taxaInput));
+ await interaction.showModal(modal);
 
-    const taxa = parseInt(interaction.values[0]);
+ } catch (error) {
+ console.error(`[ConfigActions] Error handling taxa guilda:`, error);
+ await interaction.reply({
+ content: '❌ Erro ao abrir configuração de taxa.',
+ ephemeral: true
+ });
+ }
+ }
 
-    // Inicializar config se não existir
-    if (!global.guildConfig) global.guildConfig = new Map();
+ static async handleTaxaSelect(interaction) {
+ try {
+ const novaTaxa = parseInt(interaction.fields.getTextInputValue('valor_taxa'));
 
-    const config = global.guildConfig.get(interaction.guild.id) || {};
-    config.taxaGuilda = taxa;
-    global.guildConfig.set(interaction.guild.id, config);
+ if (isNaN(novaTaxa) || novaTaxa < 0 || novaTaxa > 100) {
+ return interaction.reply({
+ content: '❌ Taxa inválida! Digite um valor entre 0 e 100.',
+ ephemeral: true
+ });
+ }
 
-    await interaction.update({
-      content: `✅ Taxa da guilda alterada para **${taxa}%**!`,
-      components: [],
-      embeds: []
-    });
+ // Atualizar configuração
+ if (!global.guildConfig.has(interaction.guild.id)) {
+ global.guildConfig.set(interaction.guild.id, {});
+ }
 
-    // Atualizar painel principal
-    await this.refreshMainPanel(interaction);
-  }
+ const config = global.guildConfig.get(interaction.guild.id);
+ config.taxaGuilda = novaTaxa;
+ global.guildConfig.set(interaction.guild.id, config);
 
-  // Abrir modal de registro de guilda
-  static async handleRegistrarGuilda(interaction) {
-    if (!this.isAdmin(interaction.member)) {
-      return interaction.reply({
-        content: '❌ Apenas ADMs podem alterar configurações!',
-        ephemeral: true
-      });
-    }
+ await interaction.reply({
+ content: `✅ Taxa da guilda atualizada para \`${novaTaxa}%\`!`,
+ ephemeral: true
+ });
 
-    const modal = ConfigPanel.createGuildRegistrationModal();
-    await interaction.showModal(modal);
-  }
+ console.log(`[ConfigActions] Taxa guilda updated to ${novaTaxa}% for guild ${interaction.guild.id}`);
 
-  // Processar registro de guilda
-  static async processGuildRegistration(interaction) {
-    try {
-      await interaction.deferReply({ ephemeral: true });
+ } catch (error) {
+ console.error(`[ConfigActions] Error updating taxa:`, error);
+ await interaction.reply({
+ content: '❌ Erro ao atualizar taxa.',
+ ephemeral: true
+ });
+ }
+ }
 
-      const nome = interaction.fields.getTextInputValue('guilda_nome').trim();
-      const server = interaction.fields.getTextInputValue('guilda_server').trim().toLowerCase();
+ // 🎯 NOVO: Handler para taxa de baú (ATIVADO)
+ static async handleTaxaBau(interaction) {
+ try {
+ const config = global.guildConfig?.get(interaction.guild.id) || {};
+ const taxas = config.taxasBau || {
+ royal: 10,
+ black: 15,
+ brecilien: 12,
+ avalon: 20
+ };
 
-      // Validar servidor
-      const servidoresValidos = ['americas', 'europe', 'asia'];
-      if (!servidoresValidos.includes(server)) {
-        return await interaction.editReply({
-          content: '❌ Servidor inválido! Use: americas, europe ou asia.'
-        });
-      }
+ const modal = new ModalBuilder()
+ .setCustomId('modal_taxas_bau')
+ .setTitle('📦 Configurar Taxas de Baú');
 
-      await interaction.editReply({
-        content: '⏳ Verificando guilda na API do Albion...'
-      });
+ const royalInput = new TextInputBuilder()
+ .setCustomId('taxa_royal')
+ .setLabel('Taxa Royal (%)')
+ .setPlaceholder(`Atual: ${taxas.royal}%`)
+ .setStyle(TextInputStyle.Short)
+ .setRequired(true)
+ .setMaxLength(3);
 
-      // Buscar guilda na API
-      const guildaInfo = await this.buscarGuildaAPI(nome, server);
+ const blackInput = new TextInputBuilder()
+ .setCustomId('taxa_black')
+ .setLabel('Taxa Black (%)')
+ .setPlaceholder(`Atual: ${taxas.black}%`)
+ .setStyle(TextInputStyle.Short)
+ .setRequired(true)
+ .setMaxLength(3);
 
-      if (!guildaInfo) {
-        return await interaction.editReply({
-          content: `❌ Guilda "${nome}" não encontrada no servidor ${server}!\n\nVerifique se:\n• O nome está escrito corretamente (case sensitive)\n• A guilda existe no servidor selecionado\n• A guilda está ativa no Albion`
-        });
-      }
+ const brecilienInput = new TextInputBuilder()
+ .setCustomId('taxa_brecilien')
+ .setLabel('Taxa Brecilien (%)')
+ .setPlaceholder(`Atual: ${taxas.brecilien}%`)
+ .setStyle(TextInputStyle.Short)
+ .setRequired(true)
+ .setMaxLength(3);
 
-      // Salvar configuração
-      if (!global.guildConfig) global.guildConfig = new Map();
+ const avalonInput = new TextInputBuilder()
+ .setCustomId('taxa_avalon')
+ .setLabel('Taxa Avalon (%)')
+ .setPlaceholder(`Atual: ${taxas.avalon}%`)
+ .setStyle(TextInputStyle.Short)
+ .setRequired(true)
+ .setMaxLength(3);
 
-      const config = global.guildConfig.get(interaction.guild.id) || {};
-      config.guildaRegistrada = {
-        nome: guildaInfo.name,
-        id: guildaInfo.id,
-        server: server,
-        alliance: guildaInfo.allianceName || null,
-        registradoPor: interaction.user.id,
-        dataRegistro: Date.now()
-      };
-      global.guildConfig.set(interaction.guild.id, config);
+ modal.addComponents(
+ new ActionRowBuilder().addComponents(royalInput),
+ new ActionRowBuilder().addComponents(blackInput),
+ new ActionRowBuilder().addComponents(brecilienInput),
+ new ActionRowBuilder().addComponents(avalonInput)
+ );
 
-      await interaction.editReply({
-        content: `✅ **Guilda registrada com sucesso!**\n\n🏰 **Nome:** ${guildaInfo.name}\n🌍 **Servidor:** ${server}\n👥 **Membros:** ${guildaInfo.memberCount || 'N/A'}\n${guildaInfo.allianceName ? `🤝 **Aliança:** ${guildaInfo.allianceName}` : ''}\n\nAgora o sistema de registro irá verificar automaticamente se os jogadores pertencem a esta guilda.`
-      });
+ await interaction.showModal(modal);
 
-      // Atualizar painel
-      await this.refreshMainPanel(interaction);
+ } catch (error) {
+ console.error(`[ConfigActions] Error handling taxa bau:`, error);
+ await interaction.reply({
+ content: '❌ Erro ao abrir configuração de taxas de baú.',
+ ephemeral: true
+ });
+ }
+ }
 
-    } catch (error) {
-      console.error('Erro ao registrar guilda:', error);
-      await interaction.editReply({
-        content: '❌ Erro ao registrar guilda. Tente novamente mais tarde.'
-      });
-    }
-  }
+ static async processTaxaBau(interaction) {
+ try {
+ const royal = parseInt(interaction.fields.getTextInputValue('taxa_royal'));
+ const black = parseInt(interaction.fields.getTextInputValue('taxa_black'));
+ const brecilien = parseInt(interaction.fields.getTextInputValue('taxa_brecilien'));
+ const avalon = parseInt(interaction.fields.getTextInputValue('taxa_avalon'));
 
-  // Buscar guilda na API
-  static async buscarGuildaAPI(nome, server) {
-    try {
-      const https = require('https');
+ if ([royal, black, brecilien, avalon].some(t => isNaN(t) || t < 0 || t > 100)) {
+ return interaction.reply({
+ content: '❌ Todas as taxas devem ser números entre 0 e 100!',
+ ephemeral: true
+ });
+ }
 
-      return new Promise((resolve, reject) => {
-        const encodedName = encodeURIComponent(nome);
-        const options = {
-          hostname: 'gameinfo.albiononline.com',
-          path: `/api/gameinfo/search?q=${encodedName}`,
-          method: 'GET',
-          headers: {
-            'Accept': 'application/json',
-            'User-Agent': 'Mozilla/5.0'
-          },
-          timeout: 15000
-        };
+ if (!global.guildConfig.has(interaction.guild.id)) {
+ global.guildConfig.set(interaction.guild.id, {});
+ }
 
-        const req = https.request(options, (res) => {
-          let data = '';
+ const config = global.guildConfig.get(interaction.guild.id);
+ config.taxasBau = { royal, black, brecilien, avalon };
+ global.guildConfig.set(interaction.guild.id, config);
 
-          res.on('data', (chunk) => {
-            data += chunk;
-          });
+ const embed = new EmbedBuilder()
+ .setTitle('✅ TAXAS DE BAÚ ATUALIZADAS')
+ .setDescription(
+ `**Royal:** \`${royal}%\`\n` +
+ `**Black:** \`${black}%\`\n` +
+ `**Brecilien:** \`${brecilien}%\`\n` +
+ `**Avalon:** \`${avalon}%\``
+ )
+ .setColor(0x2ECC71)
+ .setTimestamp();
 
-          res.on('end', () => {
-            try {
-              const json = JSON.parse(data);
-              const guilds = json.guilds || [];
+ await interaction.reply({
+ embeds: [embed],
+ ephemeral: true
+ });
 
-              // Procurar guilda exata (case insensitive)
-              const match = guilds.find(g => 
-                g.Name && g.Name.toLowerCase() === nome.toLowerCase()
-              );
+ console.log(`[ConfigActions] Bau taxes updated for guild ${interaction.guild.id}`);
 
-              if (match) {
-                resolve({
-                  id: match.Id,
-                  name: match.Name,
-                  allianceName: match.AllianceName,
-                  memberCount: match.MemberCount
-                });
-              } else {
-                resolve(null);
-              }
-            } catch (e) {
-              resolve(null);
-            }
-          });
-        });
+ } catch (error) {
+ console.error(`[ConfigActions] Error processing taxa bau:`, error);
+ await interaction.reply({
+ content: '❌ Erro ao atualizar taxas de baú.',
+ ephemeral: true
+ });
+ }
+ }
 
-        req.on('error', () => resolve(null));
-        req.on('timeout', () => {
-          req.destroy();
-          resolve(null);
-        });
+ // 🎯 NOVO: Handler para taxa de empréstimo (ATIVADO)
+ static async handleTaxaEmprestimo(interaction) {
+ try {
+ const config = global.guildConfig?.get(interaction.guild.id) || {};
+ const taxaAtual = config.taxaEmprestimo || 5;
 
-        req.end();
-      });
+ const modal = new ModalBuilder()
+ .setCustomId('modal_taxa_emprestimo')
+ .setTitle('💳 Configurar Taxa de Empréstimo');
 
-    } catch (error) {
-      return null;
-    }
-  }
+ const taxaInput = new TextInputBuilder()
+ .setCustomId('valor_taxa_emprestimo')
+ .setLabel('Taxa de juros do empréstimo (%)')
+ .setPlaceholder(`Atual: ${taxaAtual}%`)
+ .setStyle(TextInputStyle.Short)
+ .setRequired(true)
+ .setMaxLength(3);
 
-  // Atualizar bot (reinstala estrutura e recria painéis)
-  static async handleAtualizarBot(interaction) {
-    if (!this.isAdmin(interaction.member)) {
-      return interaction.reply({
-        content: '❌ Apenas ADMs podem usar esta função!',
-        ephemeral: true
-      });
-    }
+ modal.addComponents(new ActionRowBuilder().addComponents(taxaInput));
+ await interaction.showModal(modal);
 
-    await interaction.deferReply({ ephemeral: true });
+ } catch (error) {
+ console.error(`[ConfigActions] Error handling taxa emprestimo:`, error);
+ await interaction.reply({
+ content: '❌ Erro ao abrir configuração de taxa de empréstimo.',
+ ephemeral: true
+ });
+ }
+ }
 
-    try {
-      const setup = new SetupManager(interaction.guild, interaction);
+ static async processTaxaEmprestimo(interaction) {
+ try {
+ const taxa = parseInt(interaction.fields.getTextInputValue('valor_taxa_emprestimo'));
 
-      // Atualizar estrutura (canais/cargos)
-      const result = await setup.update();
+ if (isNaN(taxa) || taxa < 0 || taxa > 100) {
+ return interaction.reply({
+ content: '❌ Taxa inválida! Digite um valor entre 0 e 100.',
+ ephemeral: true
+ });
+ }
 
-      // Recriar painéis se necessário
-      await this.recreatePanels(interaction.guild);
+ if (!global.guildConfig.has(interaction.guild.id)) {
+ global.guildConfig.set(interaction.guild.id, {});
+ }
 
-      const embed = new EmbedBuilder()
-        .setTitle('🔄 **BOT ATUALIZADO**')
-        .setDescription('Todas as configurações foram atualizadas!')
-        .setColor(0x2ECC71)
-        .addFields(
-          { name: '🆕 Canais Criados', value: `${result.createdChannels.length}`, inline: true },
-          { name: '📁 Categorias', value: `${result.createdCategories.length}`, inline: true },
-          { name: '🎭 Cargos', value: `${result.rolesChecked.length}`, inline: true },
-          { name: '📋 Painéis', value: '✅ Verificados e recriados se necessário', inline: false }
-        );
+ const config = global.guildConfig.get(interaction.guild.id);
+ config.taxaEmprestimo = taxa;
+ global.guildConfig.set(interaction.guild.id, config);
 
-      await interaction.editReply({
-        embeds: [embed]
-      });
+ await interaction.reply({
+ content: `✅ Taxa de empréstimo atualizada para \`${taxa}%\`!`,
+ ephemeral: true
+ });
 
-    } catch (error) {
-      console.error('Erro ao atualizar bot:', error);
-      await interaction.editReply({
-        content: `❌ Erro ao atualizar: ${error.message}`
-      });
-    }
-  }
+ console.log(`[ConfigActions] Loan tax updated to ${taxa}% for guild ${interaction.guild.id}`);
 
-  // Recriar painéis perdidos
-  static async recreatePanels(guild) {
-    // Painel de Configurações
-    const canalConfig = guild.channels.cache.find(c => c.name === '🔧╠configurações');
-    if (canalConfig) {
-      // Verificar se já existe painel do bot
-      const messages = await canalConfig.messages.fetch({ limit: 50 });
-      const painelConfig = messages.find(m => 
-        m.author.bot && 
-        m.embeds.length > 0 && 
-        m.embeds[0].title?.includes('CONFIGURAÇÕES')
-      );
+ } catch (error) {
+ console.error(`[ConfigActions] Error processing taxa emprestimo:`, error);
+ await interaction.reply({
+ content: '❌ Erro ao atualizar taxa de empréstimo.',
+ ephemeral: true
+ });
+ }
+ }
 
-      if (!painelConfig) {
-        await ConfigPanel.sendPanel(canalConfig);
-      } else {
-        await ConfigPanel.updatePanel(painelConfig);
-      }
-    }
+ static async handleRegistrarGuilda(interaction) {
+ try {
+ const modal = new ModalBuilder()
+ .setCustomId('modal_registrar_guilda')
+ .setTitle('🏰 Registrar Guilda');
 
-    // Painel de Registro
-    const canalRegistrar = guild.channels.cache.find(c => c.name === '📋╠registrar');
-    if (canalRegistrar) {
-      const messages = await canalRegistrar.messages.fetch({ limit: 50 });
-      const painelRegistro = messages.find(m => 
-        m.author.bot && 
-        m.embeds.length > 0 && 
-        m.embeds[0].title?.includes('Bem-vindo')
-      );
+ const nomeInput = new TextInputBuilder()
+ .setCustomId('nome_guilda')
+ .setLabel('Nome da Guilda')
+ .setPlaceholder('Ex: NOTAG')
+ .setStyle(TextInputStyle.Short)
+ .setRequired(true)
+ .setMaxLength(50);
 
-      if (!painelRegistro) {
-        const RegistrationPanel = require('./registrationPanel');
-        await RegistrationPanel.sendPanel(canalRegistrar);
-      }
-    }
-  }
+ const serverInput = new TextInputBuilder()
+ .setCustomId('server_guilda')
+ .setLabel('Servidor')
+ .setPlaceholder('Ex: West')
+ .setStyle(TextInputStyle.Short)
+ .setRequired(true)
+ .setMaxLength(50);
 
-  // Atualizar painel principal
-  static async refreshMainPanel(interaction) {
-    try {
-      const canal = interaction.guild.channels.cache.find(c => c.name === '🔧╠configurações');
-      if (!canal) return;
+ modal.addComponents(
+ new ActionRowBuilder().addComponents(nomeInput),
+ new ActionRowBuilder().addComponents(serverInput)
+ );
 
-      const messages = await canal.messages.fetch({ limit: 50 });
-      const painel = messages.find(m => 
-        m.author.bot && 
-        m.embeds.length > 0 && 
-        m.embeds[0].title?.includes('CONFIGURAÇÕES')
-      );
+ await interaction.showModal(modal);
 
-      if (painel) {
-        await ConfigPanel.updatePanel(painel);
-      }
-    } catch (error) {
-      console.error('Erro ao atualizar painel:', error);
-    }
-  }
+ } catch (error) {
+ console.error(`[ConfigActions] Error handling registrar guilda:`, error);
+ await interaction.reply({
+ content: '❌ Erro ao abrir registro de guilda.',
+ ephemeral: true
+ });
+ }
+ }
 
-  // Handlers para opções inativas (mostram aviso)
-  static async handleXP(interaction) {
-    if (!this.isAdmin(interaction.member)) {
-      return interaction.reply({
-        content: '❌ Apenas ADMs!',
-        ephemeral: true
-      });
-    }
-    await interaction.reply({
-      content: '🔴 **Sistema XP**\n\nEsta função está desativada no momento.\nFicará disponível em uma futura atualização.',
-      ephemeral: true
-    });
-  }
+ static async processGuildRegistration(interaction) {
+ try {
+ const nome = interaction.fields.getTextInputValue('nome_guilda').trim();
+ const server = interaction.fields.getTextInputValue('server_guilda').trim();
 
-  static async handleTaxaBau(interaction) {
-    if (!this.isAdmin(interaction.member)) {
-      return interaction.reply({
-        content: '❌ Apenas ADMs!',
-        ephemeral: true
-      });
-    }
-    await interaction.reply({
-      content: '🔴 **Taxa de Venda de Baú**\n\nEsta função está desativada no momento.\nFicará disponível em uma futura atualização.',
-      ephemeral: true
-    });
-  }
+ if (!nome || !server) {
+ return interaction.reply({
+ content: '❌ Nome e servidor são obrigatórios!',
+ ephemeral: true
+ });
+ }
 
-  static async handleTaxaEmprestimo(interaction) {
-    if (!this.isAdmin(interaction.member)) {
-      return interaction.reply({
-        content: '❌ Apenas ADMs!',
-        ephemeral: true
-      });
-    }
-    await interaction.reply({
-      content: '🔴 **Taxa de Empréstimo**\n\nEsta função está desativada no momento.\nFicará disponível em uma futura atualização.',
-      ephemeral: true
-    });
-  }
+ if (!global.guildConfig.has(interaction.guild.id)) {
+ global.guildConfig.set(interaction.guild.id, {});
+ }
+
+ const config = global.guildConfig.get(interaction.guild.id);
+ config.guildaRegistrada = {
+ nome: nome,
+ server: server,
+ dataRegistro: Date.now()
+ };
+ global.guildConfig.set(interaction.guild.id, config);
+
+ const embed = new EmbedBuilder()
+ .setTitle('✅ GUILDA REGISTRADA')
+ .setDescription(
+ `**Nome:** ${nome}\n` +
+ `**Servidor:** ${server}\n` +
+ `**Registrado em:** ${new Date().toLocaleDateString('pt-BR')}`
+ )
+ .setColor(0x2ECC71)
+ .setTimestamp();
+
+ await interaction.reply({
+ embeds: [embed],
+ ephemeral: true
+ });
+
+ console.log(`[ConfigActions] Guild registered: ${nome} on ${server}`);
+
+ } catch (error) {
+ console.error(`[ConfigActions] Error registering guild:`, error);
+ await interaction.reply({
+ content: '❌ Erro ao registrar guilda.',
+ ephemeral: true
+ });
+ }
+ }
+
+ static async handleXP(interaction) {
+ try {
+ if (!global.guildConfig.has(interaction.guild.id)) {
+ global.guildConfig.set(interaction.guild.id, {});
+ }
+
+ const config = global.guildConfig.get(interaction.guild.id);
+ config.xpAtivo = !config.xpAtivo;
+ global.guildConfig.set(interaction.guild.id, config);
+
+ const status = config.xpAtivo ? '✅ ATIVADO' : '🔴 DESATIVADO';
+
+ await interaction.reply({
+ content: `Sistema XP ${status}!`,
+ ephemeral: true
+ });
+
+ } catch (error) {
+ console.error(`[ConfigActions] Error handling XP:`, error);
+ await interaction.reply({
+ content: '❌ Erro ao alterar configuração de XP.',
+ ephemeral: true
+ });
+ }
+ }
+
+ static async handleAtualizarBot(interaction) {
+ try {
+ const SetupManager = require('./setupManager');
+ const setup = new SetupManager(interaction.guild, interaction);
+
+ await interaction.deferReply({ ephemeral: true });
+
+ const result = await setup.update();
+
+ const embed = new EmbedBuilder()
+ .setTitle('🔄 ATUALIZAÇÃO CONCLUÍDA')
+ .setDescription(result.message)
+ .setColor(0x2ECC71)
+ .setTimestamp();
+
+ await interaction.editReply({
+ embeds: [embed]
+ });
+
+ } catch (error) {
+ console.error(`[ConfigActions] Error updating bot:`, error);
+ await interaction.reply({
+ content: '❌ Erro ao atualizar bot.',
+ ephemeral: true
+ });
+ }
+ }
 }
 
 module.exports = ConfigActions;

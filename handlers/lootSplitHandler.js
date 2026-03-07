@@ -117,8 +117,6 @@ class LootSplitHandler {
  tempoTotalParticipacao = tempoTotalEvento * participantes.length;
  }
 
- // 🎯 CORREÇÃO: Sacos são ADICIONADOS ao valor total, não subtraídos
- // Fórmula correta: (Valor Total + Sacos - Reparo) = Valor Líquido para divisão
  const valorBase = valorTotal + valorSacos - valorReparo;
  const valorTaxa = Math.floor(valorBase * (taxaGuilda / 100));
  const valorDistribuir = valorBase - valorTaxa;
@@ -374,20 +372,30 @@ class LootSplitHandler {
  Database.addSaldo(participante.userId, participante.valor, 'loot_split_evento');
  sucessos++;
 
+ // 🎨 DM SUPER MODERNA - Pagamento Recebido
  try {
  const user = await interaction.client.users.fetch(participante.userId);
- await user.send({
- embeds: [
- new EmbedBuilder()
+ const novoSaldo = Database.getUser(participante.userId).saldo;
+
+ const embed = new EmbedBuilder()
  .setTitle('💰 PAGAMENTO RECEBIDO')
  .setDescription(
- `Você recebeu \`${participante.valor.toLocaleString()}\` do evento!\n` +
- `Novo saldo: \`${Database.getUser(participante.userId).saldo.toLocaleString()}\``
+ `🎉 **Parabéns!** Você recebeu um pagamento!\n\n` +
+ `> **Valor:** \`${participante.valor.toLocaleString()}\`\n` +
+ `> **Evento:** ${simulation.eventId}\n` +
+ `> **Data:** ${new Date().toLocaleString('pt-BR')}\n\n` +
+ `💎 **Seu Novo Saldo:** \`\`\`${novoSaldo.toLocaleString()}\`\`\``
  )
- .setColor(0x57F287)
- .setTimestamp()
- ]
- });
+ .setColor(0x2ECC71)
+ .setThumbnail('https://i.imgur.com/5K9Q5ZK.png')
+ .setImage('https://i.imgur.com/JPepvGx.png')
+ .setFooter({ 
+ text: 'NOTAG Bot • Sistema Financeiro', 
+ iconURL: 'https://i.imgur.com/8QBYRrm.png' 
+ })
+ .setTimestamp();
+
+ await user.send({ embeds: [embed] });
  } catch (e) {
  console.log(`[LootSplit] Could not DM user ${participante.userId}`);
  }

@@ -1,166 +1,230 @@
 const {
-  EmbedBuilder,
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle
+ EmbedBuilder,
+ ActionRowBuilder,
+ StringSelectMenuBuilder,
+ StringSelectMenuOptionBuilder,
+ ButtonBuilder,
+ ButtonStyle
 } = require('discord.js');
 
 class MemberListPanel {
-  // Criar embed da lista de membros
-  static async createMemberListEmbed(guild) {
-    const membros = await guild.members.fetch();
+ static async sendPanel(channel, guild) {
+ try {
+ console.log(`[MemberList] Sending panel to channel ${channel.id}`);
 
-    // Filtrar por cargos
-    const cargosMembro = ['Membro', 'Aliança', 'Convidado'];
-    const membrosPorCargo = {
-      'Membro': [],
-      'Aliança': [],
-      'Convidado': []
-    };
+ const embed = new EmbedBuilder()
+ .setTitle('📋 LISTA DE MEMBROS')
+ .setDescription(
+ '**Gerencie e visualize todos os membros da guilda!**\n\n' +
+ '🎭 Use o menu abaixo para filtrar por cargo\n' +
+ '🔄 Clique em atualizar para ver dados em tempo real\n\n' +
+ '*Sistema integrado com registro automático*'
+ )
+ .setColor(0x1ABC9C)
+ .setImage('https://i.imgur.com/5K9Q5ZK.png') // Banner opcional
+ .setFooter({ text: 'Sistema de Gestão de Membros • NOTAG Bot' })
+ .setTimestamp();
 
-    membros.forEach(member => {
-      if (member.user.bot) return;
+ // Menu de seleção de cargos
+ const cargosRow = new ActionRowBuilder()
+ .addComponents(
+ new StringSelectMenuBuilder()
+ .setCustomId('select_filtro_cargo')
+ .setPlaceholder('🎭 Filtrar por cargo')
+ .addOptions(
+ new StringSelectMenuOptionBuilder()
+ .setLabel('Todos os cargos')
+ .setValue('todos')
+ .setDescription('Mostrar todos os membros')
+ .setEmoji('👥'),
+ new StringSelectMenuOptionBuilder()
+ .setLabel('ADM')
+ .setValue('ADM')
+ .setDescription('Administradores')
+ .setEmoji('👑'),
+ new StringSelectMenuOptionBuilder()
+ .setLabel('Staff')
+ .setValue('Staff')
+ .setDescription('Equipe Staff')
+ .setEmoji('🛡️'),
+ new StringSelectMenuOptionBuilder()
+ .setLabel('Caller')
+ .setValue('Caller')
+ .setDescription('Callers de evento')
+ .setEmoji('📢'),
+ new StringSelectMenuOptionBuilder()
+ .setLabel('Tesoureiro')
+ .setValue('tesoureiro')
+ .setDescription('Gestores financeiros')
+ .setEmoji('💰'),
+ new StringSelectMenuOptionBuilder()
+ .setLabel('Recrutador')
+ .setValue('Recrutador')
+ .setDescription('Recrutadores')
+ .setEmoji('📝'),
+ new StringSelectMenuOptionBuilder()
+ .setLabel('Membro')
+ .setValue('Membro')
+ .setDescription('Membros oficiais')
+ .setEmoji('⚔️'),
+ new StringSelectMenuOptionBuilder()
+ .setLabel('Aliança')
+ .setValue('Aliança')
+ .setDescription('Membros de aliança')
+ .setEmoji('🤝'),
+ new StringSelectMenuOptionBuilder()
+ .setLabel('Convidado')
+ .setValue('Convidado')
+ .setDescription('Convidados')
+ .setEmoji('🎫')
+ )
+ );
 
-      for (const cargoNome of cargosMembro) {
-        if (member.roles.cache.some(r => r.name === cargoNome)) {
-          const nick = member.nickname || member.user.username;
-          const status = member.presence?.status || 'offline';
-          const statusEmoji = {
-            'online': '🟢',
-            'idle': '🟡',
-            'dnd': '🔴',
-            'offline': '⚫'
-          }[status] || '⚫';
+ const botaoRow = new ActionRowBuilder()
+ .addComponents(
+ new ButtonBuilder()
+ .setCustomId('btn_atualizar_lista_membros')
+ .setLabel('🔄 Atualizar Lista')
+ .setStyle(ButtonStyle.Primary),
+ new ButtonBuilder()
+ .setCustomId('btn_exportar_membros')
+ .setLabel('📊 Exportar Dados')
+ .setStyle(ButtonStyle.Secondary)
+ );
 
-          membrosPorCargo[cargoNome].push({
-            nick: nick,
-            user: member.user,
-            status: statusEmoji,
-            joinedAt: member.joinedAt
-          });
-          break;
-        }
-      }
-    });
+ await channel.send({
+ embeds: [embed],
+ components: [cargosRow, botaoRow]
+ });
 
-    // Ordenar por data de entrada (mais antigos primeiro)
-    for (const cargo in membrosPorCargo) {
-      membrosPorCargo[cargo].sort((a, b) => a.joinedAt - b.joinedAt);
-    }
+ console.log(`[MemberList] Panel sent successfully`);
 
-    const embed = new EmbedBuilder()
-      .setTitle('📋 LISTA DE MEMBROS')
-      .setDescription(`**${guild.name}**\nTotal de membros registrados: **${
-        membrosPorCargo['Membro'].length + 
-        membrosPorCargo['Aliança'].length + 
-        membrosPorCargo['Convidado'].length
-      }**`)
-      .setColor(0x2C3E50)
-      .setThumbnail(guild.iconURL({ dynamic: true }))
-      .setTimestamp();
+ } catch (error) {
+ console.error(`[MemberList] Error sending panel:`, error);
+ throw error;
+ }
+ }
 
-    // Membros da Guilda
-    if (membrosPorCargo['Membro'].length > 0) {
-      const listaMembros = membrosPorCargo['Membro']
-        .map((m, index) => `${index + 1}. ${m.status} **${m.nick}**`)
-        .join('\n');
+ static async updatePanel(message, guild, filtroCargo = 'todos') {
+ try {
+ console.log(`[MemberList] Updating panel with filter: ${filtroCargo}`);
 
-      embed.addFields({
-        name: `👥 MEMBROS DA GUILDA (${membrosPorCargo['Membro'].length})`,
-        value: listaMembros.substring(0, 1024) || 'Nenhum',
-        inline: false
-      });
-    }
+ // Buscar membros com o cargo específico ou todos
+ const membros = await guild.members.fetch();
+ const membrosFiltrados = [];
 
-    // Aliança
-    if (membrosPorCargo['Aliança'].length > 0) {
-      const listaAlianca = membrosPorCargo['Aliança']
-        .map((m, index) => `${index + 1}. ${m.status} **${m.nick}**`)
-        .join('\n');
+ for (const [id, member] of membros) {
+ if (member.user.bot) continue;
 
-      embed.addFields({
-        name: `🤝 ALIANÇA (${membrosPorCargo['Aliança'].length})`,
-        value: listaAlianca.substring(0, 1024) || 'Nenhum',
-        inline: false
-      });
-    }
+ const roles = member.roles.cache.map(r => r.name);
 
-    // Convidados
-    if (membrosPorCargo['Convidado'].length > 0) {
-      const listaConvidados = membrosPorCargo['Convidado']
-        .map((m, index) => `${index + 1}. ${m.status} **${m.nick}**`)
-        .join('\n');
+ if (filtroCargo === 'todos' || roles.includes(filtroCargo)) {
+ // Buscar dados do banco
+ const userData = global.historicoRegistros?.get(id) || {};
+ const dbData = require('../utils/database').getUser(id);
 
-      embed.addFields({
-        name: `👋 CONVIDADOS (${membrosPorCargo['Convidado'].length})`,
-        value: listaConvidados.substring(0, 1024) || 'Nenhum',
-        inline: false
-      });
-    }
+ membrosFiltrados.push({
+ id: id,
+ tag: member.user.tag,
+ nickname: member.nickname || member.user.username,
+ roles: roles,
+ joinedAt: member.joinedAt,
+ apelido: userData.apelido || 'N/A',
+ guilda: userData.guilda || 'N/A',
+ plataforma: userData.plataforma || 'N/A',
+ saldo: dbData.saldo || 0
+ });
+ }
+ }
 
-    // Estatísticas
-    const onlineCount = Object.values(membrosPorCargo)
-      .flat()
-      .filter(m => m.status === '🟢').length;
+ // Ordenar por nome
+ membrosFiltrados.sort((a, b) => a.nickname.localeCompare(b.nickname));
 
-    embed.addFields({
-      name: '📊 ESTATÍSTICAS',
-      value: `🟢 Online: ${onlineCount}\n⚫ Offline/Invisível: ${
-        (membrosPorCargo['Membro'].length + 
-         membrosPorCargo['Aliança'].length + 
-         membrosPorCargo['Convidado'].length) - onlineCount
-      }`,
-      inline: false
-    });
+ // Criar embed moderno
+ const embed = new EmbedBuilder()
+ .setTitle(`📋 LISTA DE MEMBROS - ${filtroCargo.toUpperCase()}`)
+ .setDescription(
+ `**Total:** \`${membrosFiltrados.length}\` membros\n` +
+ `**Filtrado por:** ${filtroCargo === 'todos' ? 'Todos os cargos' : `Cargo ${filtroCargo}`}\n` +
+ `**Atualizado:** ${new Date().toLocaleTimeString('pt-BR')}`
+ )
+ .setColor(0x1ABC9C)
+ .setFooter({ text: 'NOTAG Bot • Sistema de Gestão' })
+ .setTimestamp();
 
-    return embed;
-  }
+ // Dividir em campos de 15 membros cada (limite do Discord)
+ const chunkSize = 15;
+ for (let i = 0; i < membrosFiltrados.length; i += chunkSize) {
+ const chunk = membrosFiltrados.slice(i, i + chunkSize);
 
-  // Criar botões do painel
-  static createRefreshButton() {
-    return new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId('btn_atualizar_lista_membros')
-        .setLabel('🔄 Atualizar Lista')
-        .setStyle(ButtonStyle.Primary)
-    );
-  }
+ let valor = '';
+ chunk.forEach(m => {
+ const cargoPrincipal = m.roles.find(r => 
+ ['ADM', 'Staff', 'Caller', 'tesoureiro', 'Recrutador', 'Membro', 'Aliança', 'Convidado'].includes(r)
+ ) || 'Sem cargo';
 
-  // Enviar painel no canal
-  static async sendPanel(channel, guild) {
-    try {
-      const embed = await this.createMemberListEmbed(guild);
-      const button = this.createRefreshButton();
+ const emoji = {
+ 'ADM': '👑',
+ 'Staff': '🛡️',
+ 'Caller': '📢',
+ 'tesoureiro': '💰',
+ 'Recrutador': '📝',
+ 'Membro': '⚔️',
+ 'Aliança': '🤝',
+ 'Convidado': '🎫'
+ }[cargoPrincipal] || '⚪';
 
-      await channel.send({
-        embeds: [embed],
-        components: [button]
-      });
+ valor += `${emoji} **${m.nickname}** | ${cargoPrincipal}\n`;
+ valor += `💰 \`${m.saldo.toLocaleString()}\` | 🏰 ${m.guilda}\n\n`;
+ });
 
-      console.log(`✅ Painel de lista de membros enviado em ${channel.name}`);
-      return true;
-    } catch (error) {
-      console.error('❌ Erro ao enviar painel de membros:', error);
-      return false;
-    }
-  }
+ embed.addFields({
+ name: `👥 Membros ${i + 1}-${Math.min(i + chunkSize, membrosFiltrados.length)}`,
+ value: valor || 'Nenhum membro encontrado.',
+ inline: false
+ });
+ }
 
-  // Atualizar painel existente
-  static async updatePanel(message, guild) {
-    try {
-      const embed = await this.createMemberListEmbed(guild);
-      const button = this.createRefreshButton();
+ if (membrosFiltrados.length === 0) {
+ embed.addFields({
+ name: '📋 Resultado',
+ value: 'Nenhum membro encontrado com este filtro.',
+ inline: false
+ });
+ }
 
-      await message.edit({
-        embeds: [embed],
-        components: [button]
-      });
-      return true;
-    } catch (error) {
-      console.error('❌ Erro ao atualizar painel de membros:', error);
-      return false;
-    }
-  }
+ // Manter os componentes
+ const componentes = message.components;
+
+ await message.edit({
+ embeds: [embed],
+ components: componentes
+ });
+
+ console.log(`[MemberList] Panel updated: ${membrosFiltrados.length} members`);
+
+ } catch (error) {
+ console.error(`[MemberList] Error updating panel:`, error);
+ throw error;
+ }
+ }
+
+ static async handleFilterSelect(interaction) {
+ try {
+ const cargo = interaction.values[0];
+ console.log(`[MemberList] Filter selected: ${cargo}`);
+
+ await interaction.deferUpdate();
+ await this.updatePanel(interaction.message, interaction.guild, cargo);
+
+ } catch (error) {
+ console.error(`[MemberList] Error handling filter:`, error);
+ await interaction.reply({
+ content: '❌ Erro ao aplicar filtro.',
+ ephemeral: true
+ });
+ }
+ }
 }
 
 module.exports = MemberListPanel;

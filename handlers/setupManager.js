@@ -179,7 +179,6 @@ class SetupManager {
  }
  }
 
- // 🎯 NOVO: Painel de Consultar Saldo
  if (channel && channelData.name === '🔍╠consultar-saldo') {
  const existePainel = await this.checkExistingPanel(channel, 'CONSULTAR SALDO');
  if (!existePainel) {
@@ -189,13 +188,32 @@ class SetupManager {
  }
  }
 
- // 🎯 NOVO: Painel de Saldo da Guilda (atualiza a cada 2 min)
  if (channel && channelData.name === '🏦╠saldo-guilda') {
  const existePainel = await this.checkExistingPanel(channel, 'SALDO DA GUILDA');
  if (!existePainel) {
  const BalancePanelHandler = require('./balancePanelHandler');
  await BalancePanelHandler.createAndSendPanel(channel);
  console.log(`✅ Painel de saldo da guilda enviado em ${channel.name}`);
+ }
+ }
+
+ // 🎯 NOVO: Painel de Venda de Baú
+ if (channel && channelData.name === '💰╠venda-de-baú') {
+ const existePainel = await this.checkExistingPanel(channel, 'VENDA DE BAÚ');
+ if (!existePainel) {
+ const BauSaleHandler = require('./bauSaleHandler');
+ await BauSaleHandler.sendPanel(channel);
+ console.log(`✅ Painel de venda de baú enviado em ${channel.name}`);
+ }
+ }
+
+ // 🎯 NOVO: Painel de Estatísticas de Eventos
+ if (channel && channelData.name === '📊╠painel-de-eventos') {
+ const existePainel = await this.checkExistingPanel(channel, 'PAINEL DE EVENTOS');
+ if (!existePainel) {
+ const EventStatsHandler = require('./eventStatsHandler');
+ await EventStatsHandler.sendPanel(channel);
+ console.log(`✅ Painel de estatísticas de eventos enviado em ${channel.name}`);
  }
  }
  }
@@ -283,7 +301,6 @@ class SetupManager {
  }
  }
 
- // 🎯 NOVO: Atualizar/criar painel de consultar saldo
  if (channelData.name === '🔍╠consultar-saldo') {
  const ConsultarSaldoHandler = require('./consultarSaldoHandler');
  const existePainel = await this.checkExistingPanel(channel, 'CONSULTAR SALDO');
@@ -292,12 +309,29 @@ class SetupManager {
  }
  }
 
- // 🎯 NOVO: Atualizar/criar painel de saldo da guilda
  if (channelData.name === '🏦╠saldo-guilda') {
  const BalancePanelHandler = require('./balancePanelHandler');
  const existePainel = await this.checkExistingPanel(channel, 'SALDO DA GUILDA');
  if (!existePainel) {
  await BalancePanelHandler.createAndSendPanel(channel);
+ }
+ }
+
+ // 🎯 NOVO: Atualizar/criar painel de venda de baú
+ if (channelData.name === '💰╠venda-de-baú') {
+ const BauSaleHandler = require('./bauSaleHandler');
+ const existePainel = await this.checkExistingPanel(channel, 'VENDA DE BAÚ');
+ if (!existePainel) {
+ await BauSaleHandler.sendPanel(channel);
+ }
+ }
+
+ // 🎯 NOVO: Atualizar/criar painel de estatísticas
+ if (channelData.name === '📊╠painel-de-eventos') {
+ const EventStatsHandler = require('./eventStatsHandler');
+ const existePainel = await this.checkExistingPanel(channel, 'PAINEL DE EVENTOS');
+ if (!existePainel) {
+ await EventStatsHandler.sendPanel(channel);
  }
  }
  }
@@ -342,7 +376,12 @@ class SetupManager {
  taxaGuilda: 10,
  guildaRegistrada: null,
  xpAtivo: false,
- taxaVendaBau: 10,
+ taxasBau: {
+ royal: 10,
+ black: 15,
+ brecilien: 12,
+ avalon: 20
+ },
  taxaEmprestimo: 5
  });
  }
@@ -378,12 +417,14 @@ class SetupManager {
  },
  {
  name: '📦 **Taxa Venda Baú**',
- value: `\`${config.taxaVendaBau}%\`\n🔴 Inativo`,
+ value: config.taxasBau 
+ ? `👑 ${config.taxasBau.royal}% | ⚫ ${config.taxasBau.black}%\n🌲 ${config.taxasBau.brecilien}% | 🔴 ${config.taxasBau.avalon}%`
+ : '🔴 Não configurado',
  inline: true
  },
  {
  name: '💳 **Taxa Empréstimo**',
- value: `\`${config.taxaEmprestimo}%\`\n🔴 Inativo`,
+ value: `\`${config.taxaEmprestimo || 5}%\`\n✅ Ativo`,
  inline: true
  }
  )
@@ -409,19 +450,16 @@ class SetupManager {
  new ActionRowBuilder().addComponents(
  new ButtonBuilder()
  .setCustomId('config_xp')
- .setLabel('⭐ Ativar XP')
- .setStyle(ButtonStyle.Secondary)
- .setDisabled(true),
+ .setLabel('⭐ Ativar/Desativar XP')
+ .setStyle(ButtonStyle.Secondary),
  new ButtonBuilder()
  .setCustomId('config_taxa_bau')
- .setLabel('📦 Taxa Baú')
- .setStyle(ButtonStyle.Secondary)
- .setDisabled(true),
+ .setLabel('📦 Taxas Baú')
+ .setStyle(ButtonStyle.Primary),
  new ButtonBuilder()
  .setCustomId('config_taxa_emprestimo')
  .setLabel('💳 Taxa Empréstimo')
- .setStyle(ButtonStyle.Secondary)
- .setDisabled(true)
+ .setStyle(ButtonStyle.Primary)
  ),
  new ActionRowBuilder().addComponents(
  new ButtonBuilder()
@@ -525,7 +563,7 @@ class SetupManager {
  }
  }
 
- if (channelName.includes('criar-evento')) {
+ if (channelName.includes('criar-evento') || channelName.includes('venda-de-baú')) {
  const everyonePerms = permissions.find(p => p.id === this.guild.id);
  if (everyonePerms) {
  everyonePerms.deny = everyonePerms.deny.filter(d => d !== PermissionFlagsBits.SendMessages);

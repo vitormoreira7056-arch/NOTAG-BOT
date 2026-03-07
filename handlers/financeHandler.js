@@ -151,24 +151,29 @@ class FinanceHandler {
  withdrawal.aprovadoPor = interaction.user.id;
  withdrawal.aprovadoEm = Date.now();
 
- // Notificar usuário
+ // 🎨 DM MODERNA - Saque Aprovado
  try {
  const user = await interaction.client.users.fetch(withdrawal.userId);
  const novoSaldo = Database.getUser(withdrawal.userId).saldo;
 
- await user.send({
- embeds: [
- new EmbedBuilder()
+ const embed = new EmbedBuilder()
  .setTitle('✅ SAQUE APROVADO')
  .setDescription(
- `Seu saque de \`${withdrawal.valor.toLocaleString()}\` foi aprovado!\n\n` +
- `**Aprovado por:** ${interaction.user.tag}\n` +
- `**Novo Saldo:** \`${novoSaldo.toLocaleString()}\``
+ `💰 **Transação Concluída com Sucesso!**\n\n` +
+ `> **Valor Sacado:** \`${withdrawal.valor.toLocaleString()}\`\n` +
+ `> **Aprovado por:** \`${interaction.user.tag}\`\n` +
+ `> **Data:** ${new Date().toLocaleString('pt-BR')}\n\n` +
+ `💳 **Novo Saldo:** \`${novoSaldo.toLocaleString()}\``
  )
  .setColor(0x2ECC71)
- .setTimestamp()
- ]
- });
+ .setThumbnail('https://i.imgur.com/5K9Q5ZK.png') // Ícone de moedas
+ .setFooter({ 
+ text: 'NOTAG Bot • Sistema Financeiro', 
+ iconURL: 'https://i.imgur.com/8QBYRrm.png' 
+ })
+ .setTimestamp();
+
+ await user.send({ embeds: [embed] });
  } catch (e) {
  console.log(`[Finance] Could not DM user ${withdrawal.userId}`);
  }
@@ -256,22 +261,28 @@ class FinanceHandler {
  withdrawal.motivoRecusa = motivo;
  withdrawal.recusadoPor = interaction.user.id;
 
- // Notificar usuário
+ // 🎨 DM MODERNA - Saque Recusado
  try {
  const user = await interaction.client.users.fetch(withdrawal.userId);
- await user.send({
- embeds: [
- new EmbedBuilder()
+
+ const embed = new EmbedBuilder()
  .setTitle('❌ SAQUE RECUSADO')
  .setDescription(
- `Seu saque de \`${withdrawal.valor.toLocaleString()}\` foi recusado.\n\n` +
- `**Motivo:** ${motivo}\n` +
- `**Recusado por:** ${interaction.user.tag}`
+ `⚠️ **Sua solicitação de saque foi recusada.**\n\n` +
+ `> **Valor Solicitado:** \`${withdrawal.valor.toLocaleString()}\`\n` +
+ `> **Motivo:** \`\`\`${motivo}\`\`\`\n` +
+ `> **Recusado por:** \`${interaction.user.tag}\`\n\n` +
+ `💡 *Se você tiver dúvidas, entre em contato com um administrador.*`
  )
  .setColor(0xE74C3C)
- .setTimestamp()
- ]
- });
+ .setThumbnail('https://i.imgur.com/8QBYRrm.png')
+ .setFooter({ 
+ text: 'NOTAG Bot • Sistema Financeiro', 
+ iconURL: 'https://i.imgur.com/5K9Q5ZK.png' 
+ })
+ .setTimestamp();
+
+ await user.send({ embeds: [embed] });
  } catch (e) {
  console.log(`[Finance] Could not DM user ${withdrawal.userId}`);
  }
@@ -422,26 +433,32 @@ class FinanceHandler {
  loan.aprovadoPor = interaction.user.id;
  loan.aprovadoEm = Date.now();
 
- // Notificar usuário
+ // 🎨 DM MODERNA - Empréstimo Aprovado
  try {
  const user = await interaction.client.users.fetch(loan.userId);
  const novoSaldo = Database.getUser(loan.userId).saldo;
  const dividaTotal = Database.getUser(loan.userId).emprestimosPendentes || loan.valor;
 
- await user.send({
- embeds: [
- new EmbedBuilder()
+ const embed = new EmbedBuilder()
  .setTitle('✅ EMPRÉSTIMO APROVADO')
  .setDescription(
- `Seu empréstimo de \`${loan.valor.toLocaleString()}\` foi aprovado!\n\n` +
- `**Aprovado por:** ${interaction.user.tag}\n` +
- `**Novo Saldo:** \`${novoSaldo.toLocaleString()}\`\n` +
- `**Dívida Total:** \`${dividaTotal.toLocaleString()}\``
+ `💳 **Crédito Liberado!**\n\n` +
+ `> **Valor do Empréstimo:** \`${loan.valor.toLocaleString()}\`\n` +
+ `> **Aprovado por:** \`${interaction.user.tag}\`\n` +
+ `> **Data:** ${new Date().toLocaleString('pt-BR')}\n\n` +
+ `💰 **Novo Saldo:** \`${novoSaldo.toLocaleString()}\`\n` +
+ `📊 **Dívida Total:** \`${dividaTotal.toLocaleString()}\`\n\n` +
+ `⚠️ *Lembre-se de quitar seu empréstimo assim que possível!*`
  )
- .setColor(0x2ECC71)
- .setTimestamp()
- ]
- });
+ .setColor(0x3498DB)
+ .setThumbnail('https://i.imgur.com/8QBYRrm.png')
+ .setFooter({ 
+ text: 'NOTAG Bot • Sistema Financeiro', 
+ iconURL: 'https://i.imgur.com/5K9Q5ZK.png' 
+ })
+ .setTimestamp();
+
+ await user.send({ embeds: [embed] });
  } catch (e) {
  console.log(`[Finance] Could not DM user ${loan.userId}`);
  }
@@ -493,21 +510,27 @@ class FinanceHandler {
  loan.status = 'recusado';
  loan.recusadoPor = interaction.user.id;
 
- // Notificar usuário
+ // 🎨 DM MODERNA - Empréstimo Recusado
  try {
  const user = await interaction.client.users.fetch(loan.userId);
- await user.send({
- embeds: [
- new EmbedBuilder()
+
+ const embed = new EmbedBuilder()
  .setTitle('❌ EMPRÉSTIMO RECUSADO')
  .setDescription(
- `Seu pedido de empréstimo de \`${loan.valor.toLocaleString()}\` foi recusado.\n\n` +
- `**Recusado por:** ${interaction.user.tag}`
+ `⚠️ **Sua solicitação de empréstimo foi recusada.**\n\n` +
+ `> **Valor Solicitado:** \`${loan.valor.toLocaleString()}\`\n` +
+ `> **Recusado por:** \`${interaction.user.tag}\`\n\n` +
+ `💡 *Entre em contato com a administração para mais informações.*`
  )
  .setColor(0xE74C3C)
- .setTimestamp()
- ]
- });
+ .setThumbnail('https://i.imgur.com/8QBYRrm.png')
+ .setFooter({ 
+ text: 'NOTAG Bot • Sistema Financeiro', 
+ iconURL: 'https://i.imgur.com/5K9Q5ZK.png' 
+ })
+ .setTimestamp();
+
+ await user.send({ embeds: [embed] });
  } catch (e) {
  console.log(`[Finance] Could not DM user ${loan.userId}`);
  }
@@ -615,15 +638,24 @@ class FinanceHandler {
  console.log(`[Finance] Could not fetch destination user ${userIdDestino}`);
  }
 
- // Enviar confirmação no privado do destino
+ // 🎨 DM MODERNA - Solicitação de Transferência (para destino)
  try {
  const destinoUser = await interaction.client.users.fetch(userIdDestino);
+
  const embed = new EmbedBuilder()
  .setTitle('🔄 SOLICITAÇÃO DE TRANSFERÊNCIA')
  .setDescription(
- `${interaction.user.tag} quer transferir \`${valor.toLocaleString()}\` para você.`
+ `💸 **Você recebeu uma proposta de transferência!**\n\n` +
+ `> **De:** \`${interaction.user.tag}\`\n` +
+ `> **Valor:** \`${valor.toLocaleString()}\`\n\n` +
+ `🤔 *Aceitar ou recusar esta transferência?*`
  )
  .setColor(0xF1C40F)
+ .setThumbnail('https://i.imgur.com/5K9Q5ZK.png')
+ .setFooter({ 
+ text: 'NOTAG Bot • Sistema Financeiro', 
+ iconURL: 'https://i.imgur.com/8QBYRrm.png' 
+ })
  .setTimestamp();
 
  const botoes = new ActionRowBuilder()
@@ -691,26 +723,52 @@ class FinanceHandler {
  transfer.status = 'concluida';
  transfer.dataAceite = Date.now();
 
- // Notificar origem
+ // 🎨 DM MODERNA - Transferência Aceita (para origem)
  try {
  const origemUser = await interaction.client.users.fetch(transfer.fromId);
- await origemUser.send({
- embeds: [
- new EmbedBuilder()
+
+ const embed = new EmbedBuilder()
  .setTitle('✅ TRANSFERÊNCIA CONCLUÍDA')
  .setDescription(
- `Sua transferência de \`${transfer.valor.toLocaleString()}\` para ${interaction.user.tag} foi aceita!`
+ `🎉 **Sua transferência foi aceita!**\n\n` +
+ `> **Para:** \`${interaction.user.tag}\`\n` +
+ `> **Valor:** \`${transfer.valor.toLocaleString()}\`\n` +
+ `> **Data:** ${new Date().toLocaleString('pt-BR')}\n\n` +
+ `💰 O valor já foi debitado da sua conta.`
  )
  .setColor(0x2ECC71)
- .setTimestamp()
- ]
- });
+ .setThumbnail('https://i.imgur.com/5K9Q5ZK.png')
+ .setFooter({ 
+ text: 'NOTAG Bot • Sistema Financeiro', 
+ iconURL: 'https://i.imgur.com/8QBYRrm.png' 
+ })
+ .setTimestamp();
+
+ await origemUser.send({ embeds: [embed] });
  } catch (e) {
  console.log(`[Finance] Could not notify origin user ${transfer.fromId}`);
  }
 
+ // 🎨 DM para quem aceitou
+ const embedAceite = new EmbedBuilder()
+ .setTitle('✅ TRANSFERÊNCIA RECEBIDA')
+ .setDescription(
+ `💰 **Você aceitou a transferência!**\n\n` +
+ `> **De:** \`${transfer.fromTag}\`\n` +
+ `> **Valor Recebido:** \`${transfer.valor.toLocaleString()}\`\n` +
+ `> **Data:** ${new Date().toLocaleString('pt-BR')}`
+ )
+ .setColor(0x2ECC71)
+ .setThumbnail('https://i.imgur.com/5K9Q5ZK.png')
+ .setFooter({ 
+ text: 'NOTAG Bot • Sistema Financeiro', 
+ iconURL: 'https://i.imgur.com/8QBYRrm.png' 
+ })
+ .setTimestamp();
+
  await interaction.update({
- content: `✅ Você aceitou a transferência de \`${transfer.valor.toLocaleString()}\` de ${transfer.fromTag}!`,
+ content: '',
+ embeds: [embedAceite],
  components: []
  });
 
@@ -762,26 +820,50 @@ class FinanceHandler {
 
  transfer.status = 'recusada';
 
- // Notificar origem
+ // 🎨 DM MODERNA - Transferência Recusada (para origem)
  try {
  const origemUser = await interaction.client.users.fetch(transfer.fromId);
- await origemUser.send({
- embeds: [
- new EmbedBuilder()
+
+ const embed = new EmbedBuilder()
  .setTitle('❌ TRANSFERÊNCIA RECUSADA')
  .setDescription(
- `${interaction.user.tag} recusou sua transferência de \`${transfer.valor.toLocaleString()}\`.`
+ `⚠️ **Sua transferência foi recusada.**\n\n` +
+ `> **Para:** \`${interaction.user.tag}\`\n` +
+ `> **Valor:** \`${transfer.valor.toLocaleString()}\`\n\n` +
+ `💡 O valor não foi debitado da sua conta.`
  )
  .setColor(0xE74C3C)
- .setTimestamp()
- ]
- });
+ .setThumbnail('https://i.imgur.com/8QBYRrm.png')
+ .setFooter({ 
+ text: 'NOTAG Bot • Sistema Financeiro', 
+ iconURL: 'https://i.imgur.com/5K9Q5ZK.png' 
+ })
+ .setTimestamp();
+
+ await origemUser.send({ embeds: [embed] });
  } catch (e) {
  console.log(`[Finance] Could not notify origin user ${transfer.fromId}`);
  }
 
+ // 🎨 DM para quem recusou
+ const embedRecusa = new EmbedBuilder()
+ .setTitle('❌ TRANSFERÊNCIA RECUSADA')
+ .setDescription(
+ `🚫 **Você recusou a transferência.**\n\n` +
+ `> **De:** \`${transfer.fromTag}\`\n` +
+ `> **Valor:** \`${transfer.valor.toLocaleString()}\``
+ )
+ .setColor(0xE74C3C)
+ .setThumbnail('https://i.imgur.com/8QBYRrm.png')
+ .setFooter({ 
+ text: 'NOTAG Bot • Sistema Financeiro', 
+ iconURL: 'https://i.imgur.com/5K9Q5ZK.png' 
+ })
+ .setTimestamp();
+
  await interaction.update({
- content: `❌ Você recusou a transferência de ${transfer.fromTag}.`,
+ content: '',
+ embeds: [embedRecusa],
  components: []
  });
 
@@ -801,17 +883,38 @@ class FinanceHandler {
  const emprestimosPendentes = userData.emprestimosPendentes || 0;
  const saldoLiquido = userData.saldo - emprestimosPendentes;
 
+ // 🎨 DM SUPER MODERNA - Consulta de Saldo
  const embed = new EmbedBuilder()
  .setTitle('💰 SEU SALDO')
  .setDescription(
- `**Saldo Bruto:** \`${userData.saldo.toLocaleString()}\`\n` +
- `**Empréstimos Pendentes:** \`${emprestimosPendentes.toLocaleString()}\`\n` +
- `**Saldo Líquido:** \`${saldoLiquido.toLocaleString()}\`\n\n` +
- `**Total Recebido:** \`${userData.totalRecebido.toLocaleString()}\`\n` +
- `**Total Sacado:** \`${userData.totalSacado.toLocaleString()}\``
+ `📊 **Resumo Financeiro Completo**\n\n` +
+ `💵 **Saldo Bruto:** \`\`\`${userData.saldo.toLocaleString()}\`\`\`\n` +
+ `📉 **Empréstimos Pendentes:** \`\`\`${emprestimosPendentes.toLocaleString()}\`\`\`\n` +
+ `✨ **Saldo Líquido:** \`\`\`${saldoLiquido.toLocaleString()}\`\`\`\n\n` +
+ `📈 **Estatísticas:**\n` +
+ `> Total Recebido: \`${userData.totalRecebido.toLocaleString()}\`\n` +
+ `> Total Sacado: \`${userData.totalSacado.toLocaleString()}\`\n` +
+ `> Total em Empréstimos: \`${userData.totalEmprestimos || 0}\``
  )
  .setColor(0x2ECC71)
+ .setThumbnail('https://i.imgur.com/5K9Q5ZK.png')
+ .setImage('https://i.imgur.com/JPepvGx.png') // Banner opcional
+ .setFooter({ 
+ text: `NOTAG Bot • Sistema Financeiro • ${new Date().toLocaleDateString('pt-BR')}`, 
+ iconURL: 'https://i.imgur.com/8QBYRrm.png' 
+ })
  .setTimestamp();
+
+ // Adicionar barra de progresso visual (opcional)
+ const percentualSaque = userData.totalRecebido > 0 
+ ? Math.round((userData.totalSacado / userData.totalRecebido) * 100) 
+ : 0;
+
+ embed.addFields({
+ name: '📊 Movimentação',
+ value: `Saque/Recebimento: \`${percentualSaque}%\``,
+ inline: false
+ });
 
  await user.send({ embeds: [embed] });
  console.log(`[Finance] Balance info sent to ${user.id}`);
