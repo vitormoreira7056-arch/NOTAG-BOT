@@ -10,6 +10,99 @@ const {
 } = require('discord.js');
 
 class RegistrationActions {
+  // Inicializar estruturas globais se não existirem
+  static initialize() {
+    if (!global.registrosPendentes) global.registrosPendentes = new Map();
+    if (!global.registroTemp) global.registroTemp = new Map();
+    if (!global.blacklist) global.blacklist = new Map(); // nick -> {motivo, data, staff}
+    if (!global.historicoRegistros) global.historicoRegistros = new Map(); // userId -> [{nick, status, motivo, data}]
+
+    // Iniciar auto-update do painel a cada 1 hora
+    this.startAutoUpdatePanel();
+  }
+
+  // Iniciar atualização automática a cada 1 hora
+  static startAutoUpdatePanel() {
+    console.log('⏰ Iniciando auto-update do painel de membros (1h)');
+
+    // Atualizar imediatamente ao iniciar
+    setInterval(async () => {
+      try {
+        // Verificar se client está disponível
+        if (!global.client) return;
+
+        // Para cada guilda que o bot está
+        for (const guild of global.client.guilds.cache.values()) {
+          await this.updateMemberListPanel(guild);
+        }
+        console.log(`🔄 Painel de membros atualizado automaticamente (${new Date().toLocaleTimeString()})`);
+      } catch (error) {
+        console.error('Erro no auto-update do painel:', error);
+      }
+    }, 60 * 60 * 1000); // 1 hora em ms
+  }
+
+  // Verificar blacklist
+  static checkBlacklist(nick, userId) {
+    if (!global.blacklist) return { isBlacklisted: false };
+
+    const nickLower = nick.toLowerCase();
+
+    // Verificar por nick
+    if (global.blacklist.has(nickLower)) {
+      return {
+        isBlacklisted: true,
+        reason: global.blacklist.get(nickLower).motivo,
+        type: 'nick'
+      };
+    }
+
+    return { isBlacklisted: false };
+  }
+
+  // Adicionar à blacklist
+  static async addToBlacklist(nick, motivo, staffId) {
+    if (!global.blacklist) global.blacklist = new Map();
+
+    global.blacklist.set(nick.toLowerCase(), {
+      nick: nick,
+      motivo: motivo,
+      data: Date.now(),
+      staffId: staffId
+    });
+
+    console.log(`🚫 Nick "${nick}" adicionado à blacklist por ${staffId}`);
+  }
+
+  // Obter histórico de recusas
+  static getHistoricoRecusas(userId, nick) {
+    if (!global.historicoRegistros) return [];
+
+    const historico = global.historicoRegistros.get(userId) || [];
+
+    // Filtrar apenas recusas deste nick específico
+    return historico.filter(h => 
+      h.nick.toLowerCase() === nick.toLowerCase() && h.status === 'recusado'
+    );
+  }
+
+  // Adicionar ao histórico
+  static addToHistory(userId, nick, status, motivo = null, staffId = null) {
+    if (!global.historicoRegistros) global.historicoRegistros = new Map();
+
+    if (!global.historicoRegistros.has(userId)) {
+      global.historicoRegistros.set(userId, []);
+    }
+
+    global.historicoRegistros.get(userId).push({
+      nick: nick,
+      status: status, // 'aprovado' ou 'recusado'
+      motivo: motivo,
+      staffId: staffId,
+      data: Date.now()
+    });
+  }
+
   // Verificar se usuário tem permissão para aprovar/recusar
   static hasApprovalPermission(member) {
     const allowedRoles = ['ADM', 'Staff', 'Recrutador'];
@@ -26,7 +119,12 @@ class RegistrationActions {
       errors.push('Você já tem um registro pendente de análise.');
     }
 
-    // Verificar se já é membro do servidor
+    // Verificar blacklist
+    const blacklistCheck = this.checkBlacklist(nick, userId);
+    if (blacklistCheck.isBlacklisted) {
+      errors.push(`🚫 Este nick está na blacklist. Motivo: ${blacklistCheck.reason}`);
+    }
+
     try {
       const member = await guild.members.fetch(userId);
       const cargosMembro = ['Membro', 'Aliança', 'Convidado'];
@@ -36,7 +134,6 @@ class RegistrationActions {
         errors.push('Você já está registrado neste servidor.');
       }
 
-      // Verificar se o nick já foi registrado por outra pessoa
       for (const [uid, registro] of global.registrosPendentes.entries()) {
         if (registro.nick.toLowerCase() === nick.toLowerCase() && uid !== userId) {
           errors.push(`O nick "${nick}" já está em processo de registro por outro usuário.`);
@@ -44,7 +141,6 @@ class RegistrationActions {
         }
       }
 
-      // Verificar se já existe membro com esse nick no servidor
       const membros = await guild.members.fetch();
       const membroComMesmoNick = membros.find(m =>
         m.nickname && m.nickname.toLowerCase() === nick.toLowerCase()
@@ -136,7 +232,6 @@ class RegistrationActions {
         });
       }
 
-      // Buscar cargos
       const cargoMembro = guild.roles.cache.find(r => r.name === 'Membro');
       const cargoAlianca = guild.roles.cache.find(r => r.name === 'Aliança');
       const cargoConvidado = guild.roles.cache.find(r => r.name === 'Convidado');
@@ -167,7 +262,6 @@ class RegistrationActions {
         });
       }
 
-      // Aplicar cargos
       try {
         await member.roles.add(cargoAdicionar);
 
@@ -177,7 +271,6 @@ class RegistrationActions {
           }
         }
 
-        // Alterar nickname
         await member.setNickname(registro.nick).catch(err => {
           console.log('Não foi possível alterar nickname:', err.message);
         });
@@ -186,7 +279,9 @@ class RegistrationActions {
         console.error('Erro ao aplicar cargos:', roleError);
       }
 
-      // Atualizar mensagem original
+      // Adicionar ao histórico
+      this.addToHistory(registro.userId, registro.nick, 'aprovado', null, interaction.user.id);
+
       const embedAprovado = new EmbedBuilder()
         .setTitle(`✅ Registro Aprovado - ${tipoCargo}`)
         .setDescription(`Registro aprovado por ${interaction.user}`)
@@ -204,13 +299,10 @@ class RegistrationActions {
         components: []
       });
 
-      // Enviar DM
       await this.sendApprovalDM(member, registro, tipoCargo);
-
-      // Remover do registro pendente
       global.registrosPendentes.delete(registro.userId);
 
-      // Atualizar painel de lista de membros
+      // Atualizar painel imediatamente
       await this.updateMemberListPanel(guild);
 
     } catch (error) {
@@ -218,6 +310,119 @@ class RegistrationActions {
       await interaction.editReply({
         content: '❌ Erro ao processar aprovação.',
         components: []
+      });
+    }
+  }
+
+  // Handler para adicionar à blacklist (novo botão)
+  static async handleBlacklistAdd(interaction, registroId) {
+    if (!this.hasApprovalPermission(interaction.member)) {
+      return interaction.reply({
+        content: '❌ Sem permissão!',
+        ephemeral: true
+      });
+    }
+
+    const registro = this.findRegistroById(registroId);
+    if (!registro) {
+      return interaction.reply({
+        content: '❌ Registro não encontrado!',
+        ephemeral: true
+      });
+    }
+
+    // Criar modal para motivo da blacklist
+    const modal = new ModalBuilder()
+      .setCustomId(`modal_blacklist_${registroId}`)
+      .setTitle('🚫 Adicionar à Blacklist');
+
+    const motivoInput = new TextInputBuilder()
+      .setCustomId('motivo_blacklist')
+      .setLabel('Motivo do banimento permanente')
+      .setPlaceholder('Ex: Tentativa de registro com nick falso múltiplas vezes')
+      .setStyle(TextInputStyle.Paragraph)
+      .setRequired(true)
+      .setMinLength(5)
+      .setMaxLength(500);
+
+    const row = new ActionRowBuilder().addComponents(motivoInput);
+    modal.addComponents(row);
+
+    await interaction.showModal(modal);
+  }
+
+  // Processar adição à blacklist
+  static async processBlacklistAdd(interaction, registroId) {
+    try {
+      const motivo = interaction.fields.getTextInputValue('motivo_blacklist').trim();
+      const registro = this.findRegistroById(registroId);
+
+      if (!registro) {
+        return interaction.reply({
+          content: '❌ Registro não encontrado!',
+          ephemeral: true
+        });
+      }
+
+      await interaction.deferReply({ ephemeral: true });
+
+      // Adicionar à blacklist
+      await this.addToBlacklist(registro.nick, motivo, interaction.user.id);
+
+      // Atualizar mensagem original
+      const embedBlacklist = new EmbedBuilder()
+        .setTitle('🚫 Jogador Blacklistado')
+        .setDescription(`Nick banido permanentemente por ${interaction.user}`)
+        .setColor(0x000000)
+        .addFields(
+          { name: '👤 Usuário', value: `<@${registro.userId}>`, inline: true },
+          { name: '🎮 Nick Banido', value: registro.nick, inline: true },
+          { name: '📝 Motivo', value: motivo, inline: false }
+        )
+        .setTimestamp();
+
+      const channel = interaction.channel;
+      const message = await channel.messages.fetch(registro.messageId).catch(() => null);
+
+      if (message) {
+        await message.edit({
+          content: '🚫 **BLACKLIST**',
+          embeds: [embedBlacklist],
+          components: []
+        });
+      }
+
+      // Notificar usuário
+      const member = await interaction.guild.members.fetch(registro.userId).catch(() => null);
+      if (member) {
+        try {
+          await member.send({
+            embeds: [
+              new EmbedBuilder()
+                .setTitle('🚫 Registro Bloqueado Permanentemente')
+                .setDescription(`Seu nick "${registro.nick}" foi adicionado à blacklist.\n\nMotivo: ${motivo}\n\nEntre em contato com a staff se acredita que houve um erro.`)
+                .setColor(0x000000)
+                .setTimestamp()
+            ]
+          });
+        } catch (e) {
+          console.log('Não foi possível enviar DM de blacklist');
+        }
+      }
+
+      // Adicionar ao histórico como recusado
+      this.addToHistory(registro.userId, registro.nick, 'recusado', `BLACKLIST: ${motivo}`, interaction.user.id);
+
+      global.registrosPendentes.delete(registro.userId);
+
+      await interaction.editReply({
+        content: `✅ ${registro.nick} adicionado à blacklist com sucesso.`
+      });
+
+    } catch (error) {
+      console.error('Erro ao processar blacklist:', error);
+      await interaction.editReply({
+        content: '❌ Erro ao processar blacklist.'
       });
     }
   }
@@ -239,7 +444,6 @@ class RegistrationActions {
       });
     }
 
-    // Criar modal para motivo da recusa
     const modal = new ModalBuilder()
       .setCustomId(`modal_recusar_registro_${registroId}`)
       .setTitle('❌ Recusar Registro');
@@ -277,7 +481,9 @@ class RegistrationActions {
       const guild = interaction.guild;
       const member = await guild.members.fetch(registro.userId).catch(() => null);
 
-      // Atualizar mensagem original
+      // Adicionar ao histórico de recusas
+      this.addToHistory(registro.userId, registro.nick, 'recusado', motivo, interaction.user.id);
+
       const embedRecusado = new EmbedBuilder()
         .setTitle('❌ Registro Recusado')
         .setDescription(`Registro recusado por ${interaction.user}`)
@@ -304,13 +510,14 @@ class RegistrationActions {
         content: '✅ Registro recusado com sucesso.'
       });
 
-      // Enviar DM com motivo
       if (member) {
         await this.sendRejectionDM(member, registro, motivo);
       }
 
-      // Remover do pendente
       global.registrosPendentes.delete(registro.userId);
+
+      // Atualizar painel imediatamente
+      await this.updateMemberListPanel(guild);
 
     } catch (error) {
       console.error('Erro ao recusar:', error);

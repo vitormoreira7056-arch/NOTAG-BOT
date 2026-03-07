@@ -1,7 +1,7 @@
-const { 
-  ModalBuilder, 
-  TextInputBuilder, 
-  TextInputStyle, 
+const {
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
   ActionRowBuilder,
   StringSelectMenuBuilder,
   StringSelectMenuOptionBuilder,
@@ -42,11 +42,21 @@ class RegistrationModal {
       .setRequired(true)
       .setMaxLength(200);
 
+    // NOVO CAMPO: Quem te convidou
+    const convidadoPorInput = new TextInputBuilder()
+      .setCustomId('reg_convidado_por')
+      .setLabel('👥 Quem te convidou? (Opcional)')
+      .setPlaceholder('Ex: @usuario ou Nick do jogador')
+      .setStyle(TextInputStyle.Short)
+      .setRequired(false)
+      .setMaxLength(50);
+
     const row1 = new ActionRowBuilder().addComponents(nickInput);
     const row2 = new ActionRowBuilder().addComponents(guildaInput);
     const row3 = new ActionRowBuilder().addComponents(armaInput);
+    const row4 = new ActionRowBuilder().addComponents(convidadoPorInput);
 
-    modal.addComponents(row1, row2, row3);
+    modal.addComponents(row1, row2, row3, row4);
     return modal;
   }
 
@@ -107,6 +117,18 @@ class RegistrationModal {
       const nick = interaction.fields.getTextInputValue('reg_nick').trim();
       const guilda = interaction.fields.getTextInputValue('reg_guilda').trim();
       const arma = interaction.fields.getTextInputValue('reg_arma').trim();
+      // NOVO: Capturar quem convidou
+      const convidadoPor = interaction.fields.getTextInputValue('reg_convidado_por')?.trim() || null;
+
+      // Verificar se usuário está na blacklist
+      const RegistrationActions = require('./registrationActions');
+      const blacklistCheck = RegistrationActions.checkBlacklist(nick, interaction.user.id);
+      if (blacklistCheck.isBlacklisted) {
+        return await interaction.editReply({
+          content: `🚫 **Você está na blacklist!**\n\nMotivo: ${blacklistCheck.reason}\n\nEntre em contato com a staff se acredita que houve um erro.`,
+          components: []
+        });
+      }
 
       if (global.registrosPendentes?.has(interaction.user.id)) {
         return await interaction.editReply({
@@ -120,6 +142,7 @@ class RegistrationModal {
         nick,
         guilda,
         arma,
+        convidadoPor, // Salvar na temp
         etapa: 'selecionar_servidor'
       });
 
@@ -205,7 +228,7 @@ class RegistrationModal {
       });
 
       tempData.platform = platform;
-      const { nick, guilda, arma, server } = tempData;
+      const { nick, guilda, arma, server, convidadoPor } = tempData;
 
       let verification = { valid: false, error: null, details: null };
       let apiError = false;
@@ -218,8 +241,6 @@ class RegistrationModal {
         verification.error = 'API indisponível ou timeout';
       }
 
-      // Se API falhou ou jogador não encontrado, ainda assim permite registro
-      // mas marca como "não verificado"
       const apiVerified = verification.valid;
 
       if (!apiVerified) {
@@ -227,7 +248,11 @@ class RegistrationModal {
         console.log(`📝 Permitindo registro mesmo assim (modo offline)`);
       }
 
-      // Criar registro (com ou sem verificação da API)
+      // Verificar histórico de recusas
+      const RegistrationActions = require('./registrationActions');
+      const historico = RegistrationActions.getHistoricoRecusas(interaction.user.id, nick);
+      const tentativasAnteriores = historico.length;
+
       const registroId = `reg_${Date.now()}_${interaction.user.id}`;
       const registroData = {
         id: registroId,
@@ -239,10 +264,13 @@ class RegistrationModal {
         server: server,
         platform: platform,
         arma: arma,
+        convidadoPor: convidadoPor, // Salvar no registro
         albionData: verification.details || null,
-        apiVerified: apiVerified, // true se API validou, false se não
+        apiVerified: apiVerified,
         apiError: apiError || !apiVerified,
         status: 'pendente',
+        tentativasAnteriores: tentativasAnteriores, // NOVO: Contador
+        historicoRecusas: historico, // NOVO: Histórico completo
         timestamp: Date.now()
       };
 
@@ -253,12 +281,16 @@ class RegistrationModal {
 
       await this.sendToApprovalChannel(interaction, registroData, client);
 
-      // Mensagem para o usuário
       let mensagemSucesso;
       if (apiVerified) {
         mensagemSucesso = '✅ Registro validado pela API e enviado para análise!';
       } else {
         mensagemSucesso = '⚠️ Registro enviado para análise!\n\n_Note: Não foi possível verificar automaticamente na API do Albion. A staff irá analisar manualmente._';
+      }
+
+      // Adicionar aviso se houver tentativas anteriores
+      if (tentativasAnteriores > 0) {
+        mensagemSucesso += `\n\n⚠️ **Atenção:** Esta é sua tentativa **#${tentativasAnteriores + 1}** de registro.`;
       }
 
       const successEmbed = new EmbedBuilder()
@@ -273,6 +305,15 @@ class RegistrationModal {
         )
         .setColor(apiVerified ? 0x2ECC71 : 0xF39C12)
         .setFooter({ text: 'Você receberá uma DM quando for analisado' });
+
+      // Adicionar campo de convidado se existir
+      if (convidadoPor) {
+        successEmbed.addFields({ 
+          name: '👥 Convidado por', 
+          value: convidadoPor, 
+          inline: false 
+        });
+      }
 
       await interaction.editReply({
         content: null,
@@ -309,7 +350,7 @@ class RegistrationModal {
       const embed = new EmbedBuilder()
         .setTitle('📝 Nova Solicitação de Registro')
         .setDescription(`Registro de ${interaction.user}`)
-        .setColor(registroData.apiVerified ? 0x2ECC71 : 0xF39C12) // Verde se verificado, Amarelo se não
+        .setColor(registroData.apiVerified ? 0x2ECC71 : 0xF39C12)
         .setThumbnail(interaction.user.displayAvatarURL({ dynamic: true }))
         .addFields(
           { name: '👤 Usuário Discord', value: `${interaction.user} (\`${interaction.user.id}\`)`, inline: false },
@@ -322,7 +363,30 @@ class RegistrationModal {
         .setFooter({ text: `ID: ${registroData.id} | ${registroData.apiVerified ? '✅ Verificado via API' : '⚠️ NÃO verificado na API'}` })
         .setTimestamp();
 
-      // Se tiver dados da API, adicionar info
+      // Adicionar campo de convidado se existir
+      if (registroData.convidadoPor) {
+        embed.addFields({ 
+          name: '👥 Convidado por', 
+          value: registroData.convidadoPor, 
+          inline: true 
+        });
+      }
+
+      // Mostrar histórico de recusas se houver
+      if (registroData.tentativasAnteriores > 0) {
+        const ultimasRecusas = registroData.historicoRecusas.slice(-3).map((h, i) => 
+          `${i + 1}. ${h.motivo} (${new Date(h.data).toLocaleDateString()})`
+        ).join('\n');
+
+        embed.addFields({
+          name: `📜 Histórico de Recusas (${registroData.tentativasAnteriores} tentativa(s))`,
+          value: ultimasRecusas || 'Ver histórico completo',
+          inline: false
+        });
+
+        embed.setColor(0xE74C3C); // Vermelho se tiver histórico de recusas
+      }
+
       if (registroData.albionData && registroData.apiVerified) {
         embed.addFields({
           name: '✅ Validação API',
@@ -356,10 +420,24 @@ class RegistrationModal {
           .setStyle(ButtonStyle.Danger)
       );
 
+      // Adicionar botão de blacklist se for recusa e tiver muitas tentativas
+      const row2 = new ActionRowBuilder();
+      if (registroData.tentativasAnteriores >= 2) {
+        row2.addComponents(
+          new ButtonBuilder()
+            .setCustomId(`blacklist_add_${registroData.id}`)
+            .setLabel('🚫 Blacklist (Banir Nick)')
+            .setStyle(ButtonStyle.Danger)
+        );
+      }
+
+      const components = [row1];
+      if (row2.components.length > 0) components.push(row2);
+
       const msg = await canalSolicitacao.send({
         content: `📢 <@&${guild.roles.cache.find(r => r.name === 'Recrutador')?.id}> <@&${guild.roles.cache.find(r => r.name === 'ADM')?.id}> Nova solicitação de registro!`,
         embeds: [embed],
-        components: [row1]
+        components: components
       });
 
       registroData.messageId = msg.id;

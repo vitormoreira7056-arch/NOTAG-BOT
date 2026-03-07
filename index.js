@@ -7,6 +7,7 @@ const {
   Events,
   PermissionFlagsBits
 } = require('discord.js');
+const fs = require('fs');
 require('dotenv').config();
 
 // Importar Handlers
@@ -24,7 +25,7 @@ const client = new Client({
     GatewayIntentBits.GuildVoiceStates,
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.DirectMessages,
-    GatewayIntentBits.GuildPresences // Necessário para status online/offline
+    GatewayIntentBits.GuildPresences
   ],
   partials: ['CHANNEL']
 });
@@ -44,12 +45,40 @@ client.commands.set(desistalarCommand.data.name, desistalarCommand);
 global.registrosPendentes = new Map();
 global.registroTemp = new Map();
 global.guildConfig = new Map();
+global.blacklist = new Map(); // NOVO: Blacklist de nicks
+global.historicoRegistros = new Map(); // NOVO: Histórico de tentativas
+global.client = client; // Referência global para o client
+
+// Carregar dados persistidos (blacklist e histórico)
+try {
+  if (!fs.existsSync('./data')) {
+    fs.mkdirSync('./data', { recursive: true });
+  }
+
+  if (fs.existsSync('./data/blacklist.json')) {
+    const blacklistData = JSON.parse(fs.readFileSync('./data/blacklist.json', 'utf8'));
+    global.blacklist = new Map(blacklistData);
+    console.log(`📋 Blacklist carregada: ${global.blacklist.size} jogadores banidos`);
+  }
+
+  if (fs.existsSync('./data/historico.json')) {
+    const historicoData = JSON.parse(fs.readFileSync('./data/historico.json', 'utf8'));
+    global.historicoRegistros = new Map(historicoData);
+    console.log(`📜 Histórico carregado: ${global.historicoRegistros.size} usuários com histórico`);
+  }
+} catch (error) {
+  console.error('❌ Erro ao carregar dados persistidos:', error);
+}
 
 // Evento Ready
 client.once(Events.ClientReady, async () => {
   console.log(`✅ Bot logado como ${client.user.tag}`);
   console.log(`🤖 ID do Bot: ${client.user.id}`);
   console.log(`📅 Data de início: ${new Date().toLocaleString()}`);
+
+  // Inicializar sistema de registro (inclui auto-update do painel a cada 1h)
+  RegistrationActions.initialize();
+  console.log('📝 Sistema de registro inicializado');
 
   // Registrar Slash Commands
   const commands = [
@@ -163,6 +192,13 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
+      // NOVO: Adicionar à Blacklist
+      if (customId.startsWith('blacklist_add_')) {
+        const regId = customId.replace('blacklist_add_', '');
+        await RegistrationActions.handleBlacklistAdd(interaction, regId);
+        return;
+      }
+
       // Lista de membros - Atualizar
       if (customId === 'btn_atualizar_lista_membros') {
         await interaction.deferUpdate();
@@ -230,8 +266,8 @@ client.on(Events.InteractionCreate, async interaction => {
         // Verificar duplicidade antes de processar
         const nick = interaction.fields.getTextInputValue('reg_nick').trim();
         const erros = await RegistrationActions.checkExistingRegistration(
-          interaction.guild, 
-          interaction.user.id, 
+          interaction.guild,
+          interaction.user.id,
           nick
         );
 
@@ -251,6 +287,13 @@ client.on(Events.InteractionCreate, async interaction => {
       if (interaction.customId.startsWith('modal_recusar_registro_')) {
         const regId = interaction.customId.replace('modal_recusar_registro_', '');
         await RegistrationActions.processRejectionWithReason(interaction, regId);
+        return;
+      }
+
+      // NOVO: Blacklist com motivo
+      if (interaction.customId.startsWith('modal_blacklist_')) {
+        const regId = interaction.customId.replace('modal_blacklist_', '');
+        await RegistrationActions.processBlacklistAdd(interaction, regId);
         return;
       }
 
@@ -277,7 +320,7 @@ client.on(Events.InteractionCreate, async interaction => {
   }
 });
 
-// Evento: Membro sai do servidor (apenas para quem tinha cargo de registro)
+// Evento: Membro sai do servidor
 client.on(Events.GuildMemberRemove, async (member) => {
   await GuildMemberRemoveHandler.handle(member);
 });
@@ -289,6 +332,41 @@ process.on('unhandledRejection', error => {
 
 process.on('uncaughtException', error => {
   console.error('❌ Uncaught exception:', error);
+});
+
+// Salvar dados antes de encerrar
+process.on('SIGINT', async () => {
+  console.log('\n💾 Salvando dados antes de encerrar...');
+  try {
+    if (!fs.existsSync('./data')) {
+      fs.mkdirSync('./data', { recursive: true });
+    }
+
+    fs.writeFileSync('./data/blacklist.json', JSON.stringify([...global.blacklist], null, 2));
+    fs.writeFileSync('./data/historico.json', JSON.stringify([...global.historicoRegistros], null, 2));
+
+    console.log('✅ Dados salvos com sucesso!');
+  } catch (error) {
+    console.error('❌ Erro ao salvar dados:', error);
+  }
+  process.exit();
+});
+
+process.on('SIGTERM', async () => {
+  console.log('\n💾 Salvando dados antes de encerrar (SIGTERM)...');
+  try {
+    if (!fs.existsSync('./data')) {
+      fs.mkdirSync('./data', { recursive: true });
+    }
+
+    fs.writeFileSync('./data/blacklist.json', JSON.stringify([...global.blacklist], null, 2));
+    fs.writeFileSync('./data/historico.json', JSON.stringify([...global.historicoRegistros], null, 2));
+
+    console.log('✅ Dados salvos com sucesso!');
+  } catch (error) {
+    console.error('❌ Erro ao salvar dados:', error);
+  }
+  process.exit();
 });
 
 // Login do Bot
