@@ -171,7 +171,7 @@ class FinanceHandler {
    withdrawal.aprovadoPor = interaction.user.id;
    withdrawal.aprovadoEm = Date.now();
 
-   // 🎨 DM MODERNA - Saque Aprovado
+   // DM - Saque Aprovado (SEM IMAGEM)
    try {
     const user = await interaction.client.users.fetch(withdrawal.userId);
     const userData = Database.getUser(withdrawal.userId);
@@ -187,10 +187,8 @@ class FinanceHandler {
       `💳 **Novo Saldo:** \`${this.formatSafeNumber(novoSaldo)}\``
      )
      .setColor(0x2ECC71)
-     .setThumbnail('https://i.imgur.com/5K9Q5ZK.png') // Ícone de moedas
      .setFooter({
-      text: 'NOTAG Bot • Sistema Financeiro',
-      iconURL: 'https://i.imgur.com/8QBYRrm.png'
+      text: 'NOTAG Bot • Sistema Financeiro'
      })
      .setTimestamp();
 
@@ -282,7 +280,7 @@ class FinanceHandler {
    withdrawal.motivoRecusa = motivo;
    withdrawal.recusadoPor = interaction.user.id;
 
-   // 🎨 DM MODERNA - Saque Recusado
+   // DM - Saque Recusado (SEM IMAGEM)
    try {
     const user = await interaction.client.users.fetch(withdrawal.userId);
 
@@ -296,10 +294,8 @@ class FinanceHandler {
       `💡 *Se você tiver dúvidas, entre em contato com um administrador.*`
      )
      .setColor(0xE74C3C)
-     .setThumbnail('https://i.imgur.com/8QBYRrm.png')
      .setFooter({
-      text: 'NOTAG Bot • Sistema Financeiro',
-      iconURL: 'https://i.imgur.com/5K9Q5ZK.png'
+      text: 'NOTAG Bot • Sistema Financeiro'
      })
      .setTimestamp();
 
@@ -454,7 +450,7 @@ class FinanceHandler {
    loan.aprovadoPor = interaction.user.id;
    loan.aprovadoEm = Date.now();
 
-   // 🎨 DM MODERNA - Empréstimo Aprovado
+   // DM - Empréstimo Aprovado (SEM IMAGEM)
    try {
     const user = await interaction.client.users.fetch(loan.userId);
     const userData = Database.getUser(loan.userId);
@@ -473,10 +469,8 @@ class FinanceHandler {
       `⚠️ *Lembre-se de quitar seu empréstimo assim que possível!*`
      )
      .setColor(0x3498DB)
-     .setThumbnail('https://i.imgur.com/8QBYRrm.png')
      .setFooter({
-      text: 'NOTAG Bot • Sistema Financeiro',
-      iconURL: 'https://i.imgur.com/5K9Q5ZK.png'
+      text: 'NOTAG Bot • Sistema Financeiro'
      })
      .setTimestamp();
 
@@ -532,7 +526,7 @@ class FinanceHandler {
    loan.status = 'recusado';
    loan.recusadoPor = interaction.user.id;
 
-   // 🎨 DM MODERNA - Empréstimo Recusado
+   // DM - Empréstimo Recusado (SEM IMAGEM)
    try {
     const user = await interaction.client.users.fetch(loan.userId);
 
@@ -545,10 +539,8 @@ class FinanceHandler {
       `💡 *Entre em contato com a administração para mais informações.*`
      )
      .setColor(0xE74C3C)
-     .setThumbnail('https://i.imgur.com/8QBYRrm.png')
      .setFooter({
-      text: 'NOTAG Bot • Sistema Financeiro',
-      iconURL: 'https://i.imgur.com/5K9Q5ZK.png'
+      text: 'NOTAG Bot • Sistema Financeiro'
      })
      .setTimestamp();
 
@@ -667,7 +659,7 @@ class FinanceHandler {
     console.log(`[Finance] Could not fetch destination user ${userIdDestino}`);
    }
 
-   // 🎨 DM MODERNA - Solicitação de Transferência (para destino)
+   // DM - Solicitação de Transferência (para destino) (SEM IMAGEM)
    try {
     const destinoUser = await interaction.client.users.fetch(userIdDestino);
 
@@ -680,10 +672,8 @@ class FinanceHandler {
       `🤔 *Aceitar ou recusar esta transferência?*`
      )
      .setColor(0xF1C40F)
-     .setThumbnail('https://i.imgur.com/5K9Q5ZK.png')
      .setFooter({
-      text: 'NOTAG Bot • Sistema Financeiro',
-      iconURL: 'https://i.imgur.com/8QBYRrm.png'
+      text: 'NOTAG Bot • Sistema Financeiro'
      })
      .setTimestamp();
 
@@ -752,7 +742,7 @@ class FinanceHandler {
    transfer.status = 'concluida';
    transfer.dataAceite = Date.now();
 
-   // 🎨 DM MODERNA - Transferência Aceita (para origem)
+   // DM - Transferência Aceita (para origem) (SEM IMAGEM)
    try {
     const origemUser = await interaction.client.users.fetch(transfer.fromId);
 
@@ -766,10 +756,8 @@ class FinanceHandler {
       `💰 O valor já foi debitado da sua conta.`
      )
      .setColor(0x2ECC71)
-     .setThumbnail('https://i.imgur.com/5K9Q5ZK.png')
      .setFooter({
-      text: 'NOTAG Bot • Sistema Financeiro',
-      iconURL: 'https://i.imgur.com/8QBYRrm.png'
+      text: 'NOTAG Bot • Sistema Financeiro'
      })
      .setTimestamp();
 
@@ -778,7 +766,7 @@ class FinanceHandler {
     console.log(`[Finance] Could not notify origin user ${transfer.fromId}`);
    }
 
-   // 🎨 DM para quem aceitou
+   // DM para quem aceitou (SEM IMAGEM)
    const embedAceite = new EmbedBuilder()
     .setTitle('✅ TRANSFERÊNCIA RECEBIDA')
     .setDescription(
@@ -788,11 +776,9 @@ class FinanceHandler {
      `\> **Data:** ${new Date().toLocaleString('pt-BR')}`
     )
     .setColor(0x2ECC71)
-    .setThumbnail('https://i.imgur.com/5K9Q5ZK.png')
     .setFooter({
-     text: 'NOTAG Bot • Sistema Financeiro',
-     iconURL: 'https://i.imgur.com/8QBYRrm.png'
-    })
+     text: 'NOTAG Bot • Sistema Financeiro'
+     })
     .setTimestamp();
 
    await interaction.update({
@@ -849,7 +835,7 @@ class FinanceHandler {
 
    transfer.status = 'recusada';
 
-   // 🎨 DM MODERNA - Transferência Recusada (para origem)
+   // DM - Transferência Recusada (para origem) (SEM IMAGEM)
    try {
     const origemUser = await interaction.client.users.fetch(transfer.fromId);
 
@@ -862,10 +848,8 @@ class FinanceHandler {
       `💡 O valor não foi debitado da sua conta.`
      )
      .setColor(0xE74C3C)
-     .setThumbnail('https://i.imgur.com/8QBYRrm.png')
      .setFooter({
-      text: 'NOTAG Bot • Sistema Financeiro',
-      iconURL: 'https://i.imgur.com/5K9Q5ZK.png'
+      text: 'NOTAG Bot • Sistema Financeiro'
      })
      .setTimestamp();
 
@@ -874,7 +858,7 @@ class FinanceHandler {
     console.log(`[Finance] Could not notify origin user ${transfer.fromId}`);
    }
 
-   // 🎨 DM para quem recusou
+   // DM para quem recusou (SEM IMAGEM)
    const embedRecusa = new EmbedBuilder()
     .setTitle('❌ TRANSFERÊNCIA RECUSADA')
     .setDescription(
@@ -883,10 +867,8 @@ class FinanceHandler {
      `\> **Valor:** \`${this.formatSafeNumber(transfer.valor)}\``
     )
     .setColor(0xE74C3C)
-    .setThumbnail('https://i.imgur.com/8QBYRrm.png')
     .setFooter({
-     text: 'NOTAG Bot • Sistema Financeiro',
-     iconURL: 'https://i.imgur.com/5K9Q5ZK.png'
+     text: 'NOTAG Bot • Sistema Financeiro'
     })
     .setTimestamp();
 
@@ -924,7 +906,7 @@ class FinanceHandler {
    const totalSacado = userData.totalSacado || 0;
    const totalEmprestimos = userData.totalEmprestimos || 0;
 
-   // 🎨 DM SUPER MODERNA - Consulta de Saldo
+   // Embed SEM IMAGENS
    const embed = new EmbedBuilder()
     .setTitle('💰 SEU SALDO')
     .setDescription(
@@ -938,11 +920,8 @@ class FinanceHandler {
      `\> Total em Empréstimos: \`${this.formatSafeNumber(totalEmprestimos)}\``
     )
     .setColor(0x2ECC71)
-    .setThumbnail('https://i.imgur.com/5K9Q5ZK.png')
-    .setImage('https://i.imgur.com/JPepvGx.png') // Banner opcional
     .setFooter({
-     text: `NOTAG Bot • Sistema Financeiro • ${new Date().toLocaleDateString('pt-BR')}`,
-     iconURL: 'https://i.imgur.com/8QBYRrm.png'
+     text: `NOTAG Bot • Sistema Financeiro • ${new Date().toLocaleDateString('pt-BR')}`
     })
     .setTimestamp();
 

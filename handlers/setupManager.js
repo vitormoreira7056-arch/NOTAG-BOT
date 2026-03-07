@@ -188,7 +188,6 @@ class SetupManager {
       }
      }
 
-     // CORREÇÃO CRÍTICA: Adicionado this.guild como segundo parâmetro
      if (channel && channelData.name === '🏦╠saldo-guilda') {
       const existePainel = await this.checkExistingPanel(channel, 'SALDO DA GUILDA');
       if (!existePainel) {
@@ -207,7 +206,6 @@ class SetupManager {
       }
      }
 
-     // CORREÇÃO CRÍTICA: Adicionado this.guild como segundo parâmetro
      if (channel && channelData.name === '📊╠painel-de-eventos') {
       const existePainel = await this.checkExistingPanel(channel, 'PAINEL DE EVENTOS');
       if (!existePainel) {
@@ -363,7 +361,6 @@ class SetupManager {
        }
       }
 
-      // CORREÇÃO CRÍTICA: Adicionado this.guild como segundo parâmetro
       if (channelData.name === '🏦╠saldo-guilda') {
        const BalancePanelHandler = require('./balancePanelHandler');
        const existePainel = await this.checkExistingPanel(channel, 'SALDO DA GUILDA');
@@ -380,7 +377,6 @@ class SetupManager {
        }
       }
 
-      // CORREÇÃO CRÍTICA: Adicionado this.guild como segundo parâmetro
       if (channelData.name === '📊╠painel-de-eventos') {
        const EventStatsHandler = require('./eventStatsHandler');
        const existePainel = await this.checkExistingPanel(channel, 'PAINEL DE EVENTOS');
@@ -846,6 +842,320 @@ class SetupManager {
    deletedRoles: this.deletedRoles,
    errors: this.errors
   };
+ }
+
+ /**
+  * Sincroniza o servidor com a estrutura atual do bot
+  * Cria canais/cargos faltantes, atualiza painéis, destrava botões
+  * @returns {Object} Resultado da sincronização
+  */
+ async syncServer() {
+  console.log('🔄 Iniciando sincronização completa do servidor...');
+
+  const resultado = {
+   canaisCriados: [],
+   cargosCriados: [],
+   paineisAtualizados: [],
+   comandosRegistrados: false,
+   botoesDestravados: [],
+   erros: []
+  };
+
+  try {
+   // 1. SINCRONIZAR CARGOS
+   console.log('📋 Verificando cargos...');
+   const requiredRoles = this.getRequiredRoles();
+
+   for (const roleName of requiredRoles) {
+    try {
+     const existingRole = this.guild.roles.cache.find(r => r.name === roleName);
+     if (!existingRole) {
+      const newRole = await this.guild.roles.create({
+       name: roleName,
+       color: this.getRoleColor(roleName),
+       permissions: this.getRolePermissions(roleName),
+       reason: 'Sincronização via Atualizar Bot'
+      });
+      resultado.cargosCriados.push(roleName);
+      console.log(`✅ Cargo criado: ${roleName}`);
+     }
+    } catch (error) {
+     console.error(`❌ Erro ao criar cargo ${roleName}:`, error);
+     resultado.erros.push(`Cargo ${roleName}: ${error.message}`);
+    }
+   }
+
+   // 2. SINCRONIZAR ESTRUTURA DE CANAIS
+   console.log('🏗️ Verificando estrutura de canais...');
+   const structure = this.getServerStructure();
+
+   for (const categoryData of structure) {
+    try {
+     // Verifica/cria categoria
+     let category = this.guild.channels.cache.find(
+      c => c.name === categoryData.name && c.type === ChannelType.GuildCategory
+     );
+
+     if (!category) {
+      category = await this.guild.channels.create({
+       name: categoryData.name,
+       type: ChannelType.GuildCategory,
+       permissionOverwrites: [
+        {
+         id: this.guild.id,
+         allow: [PermissionFlagsBits.ViewChannel],
+         deny: [PermissionFlagsBits.SendMessages, PermissionFlagsBits.Connect]
+        }
+       ]
+      });
+      resultado.canaisCriados.push(`📁 ${categoryData.name}`);
+      console.log(`✅ Categoria criada: ${categoryData.name}`);
+     }
+
+     // Verifica/cria canais dentro da categoria
+     for (const channelData of categoryData.channels) {
+      try {
+       const existingChannel = this.guild.channels.cache.find(
+        c => c.name === channelData.name && c.parentId === category.id
+       );
+
+       if (!existingChannel) {
+        const permissions = this.getChannelPermissions(channelData.name);
+        const channel = await this.guild.channels.create({
+         name: channelData.name,
+         type: channelData.type,
+         parent: category.id,
+         permissionOverwrites: permissions
+        });
+        resultado.canaisCriados.push(`   └─ #${channelData.name}`);
+        console.log(`✅ Canal criado: ${channelData.name}`);
+
+        // Envia painel para o novo canal
+        await this.sendPanelToChannel(channel, channelData.name);
+       } else {
+        // Canal existe, verifica se precisa atualizar painel
+        await this.updatePanelInChannel(existingChannel, channelData.name);
+       }
+      } catch (channelError) {
+       console.error(`❌ Erro ao processar canal ${channelData.name}:`, channelError);
+       resultado.erros.push(`Canal ${channelData.name}: ${channelError.message}`);
+      }
+     }
+    } catch (categoryError) {
+     console.error(`❌ Erro ao processar categoria ${categoryData.name}:`, categoryError);
+     resultado.erros.push(`Categoria ${categoryData.name}: ${categoryError.message}`);
+    }
+   }
+
+   // 3. ATUALIZAR PAINEIS EXISTENTES (Força recriação)
+   console.log('🎨 Atualizando painéis existentes...');
+
+   // Mapeamento de canais para handlers de painel
+   const panelMap = [
+    { name: '📋╠registrar', handler: 'registrationPanel', method: 'sendPanel' },
+    { name: '🔧╠configurações', handler: 'setupManager', method: 'sendConfigPanel', self: true },
+    { name: '📋╠lista-membros', handler: 'memberListPanel', method: 'sendPanel', args: [this.guild] },
+    { name: '➕╠criar-evento', handler: 'eventPanel', method: 'sendPanel' },
+    { name: '🔍╠consultar-saldo', handler: 'consultarSaldoHandler', method: 'sendPanel' },
+    { name: '🏦╠saldo-guilda', handler: 'balancePanelHandler', method: 'createAndSendPanel', args: [this.guild] },
+    { name: '💰╠venda-de-baú', handler: 'bauSaleHandler', method: 'sendPanel' },
+    { name: '📊╠painel-de-eventos', handler: 'eventStatsHandler', method: 'sendPanel', args: [this.guild] },
+    { name: '👤╠perfil', handler: 'perfilHandler', method: 'sendPerfilPanel' },
+    { name: '🔮╠orb-xp', handler: 'orbHandler', method: 'sendOrbPanel' }
+   ];
+
+   for (const panel of panelMap) {
+    try {
+     const channel = this.guild.channels.cache.find(c => c.name === panel.name);
+     if (!channel) continue;
+
+     // Deleta mensagens antigas do bot (paineis antigos)
+     const messages = await channel.messages.fetch({ limit: 50 });
+     const botMessages = messages.filter(m => m.author.bot && m.embeds.length > 0);
+
+     for (const [msgId, msg] of botMessages) {
+      try {
+       await msg.delete();
+       console.log(`🗑️ Painel antigo deletado em #${panel.name}`);
+      } catch (e) {
+       console.log(`⚠️ Não foi possível deletar mensagem em #${panel.name}`);
+      }
+     }
+
+     // Envia novo painel
+     if (panel.self) {
+      await this.sendConfigPanel(channel);
+     } else {
+      const Handler = require(`./${panel.handler}`);
+      if (panel.args) {
+       await Handler[panel.method](channel, ...panel.args);
+      } else {
+       await Handler[panel.method](channel);
+      }
+     }
+
+     resultado.paineisAtualizados.push(panel.name);
+     console.log(`✅ Painel atualizado: ${panel.name}`);
+
+    } catch (panelError) {
+     console.error(`❌ Erro ao atualizar painel ${panel.name}:`, panelError);
+     resultado.erros.push(`Painel ${panel.name}: ${panelError.message}`);
+    }
+   }
+
+   // 4. REGISTRAR COMANDOS SLASH (via REST API)
+   console.log('⚡ Sincronizando comandos slash...');
+   try {
+    const { REST, Routes } = require('discord.js');
+    const fs = require('fs');
+    const path = require('path');
+
+    const commands = [];
+    const commandsPath = path.join(__dirname, '..', 'commands');
+    const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith('.js'));
+
+    for (const file of commandFiles) {
+     const command = require(path.join(commandsPath, file));
+     if (command.data) {
+      commands.push(command.data.toJSON());
+     }
+    }
+
+    const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
+    await rest.put(
+     Routes.applicationCommands(this.guild.client.user.id),
+     { body: commands }
+    );
+
+    resultado.comandosRegistrados = true;
+    console.log(`✅ ${commands.length} comandos slash registrados`);
+   } catch (cmdError) {
+    console.error('❌ Erro ao registrar comandos:', cmdError);
+    resultado.erros.push(`Comandos: ${cmdError.message}`);
+   }
+
+   // 5. DESTRAVAR BOTÕES (Edita mensagens com componentes desabilitados)
+   console.log('🔓 Verificando botões travados...');
+   try {
+    // Percorre todos os canais de texto procurando mensagens com botões travados
+    const textChannels = this.guild.channels.cache.filter(c => c.isTextBased());
+
+    for (const [channelId, channel] of textChannels) {
+     try {
+      const messages = await channel.messages.fetch({ limit: 100 });
+
+      for (const [msgId, message] of messages) {
+       if (message.author.id !== this.guild.client.user.id) continue;
+       if (!message.components || message.components.length === 0) continue;
+
+       // Verifica se há botões desabilitados
+       let needsUpdate = false;
+       const newComponents = [];
+
+       for (const row of message.components) {
+        const newRow = ActionRowBuilder.from(row);
+        let rowChanged = false;
+
+        for (const component of row.components) {
+         if (component.disabled) {
+          component.setDisabled(false);
+          needsUpdate = true;
+          rowChanged = true;
+         }
+        }
+
+        if (rowChanged) {
+         newComponents.push(newRow);
+        } else {
+         newComponents.push(row);
+        }
+       }
+
+       if (needsUpdate) {
+        await message.edit({ components: newComponents });
+        resultado.botoesDestravados.push(`#${channel.name}`);
+        console.log(`🔓 Botões destravados em #${channel.name}`);
+       }
+      }
+     } catch (channelError) {
+      // Ignora erros de permissão
+     }
+    }
+   } catch (unlockError) {
+    console.error('❌ Erro ao destravar botões:', unlockError);
+    resultado.erros.push(`Destravar botões: ${unlockError.message}`);
+   }
+
+   console.log('✅ Sincronização concluída!');
+   return resultado;
+
+  } catch (error) {
+   console.error('❌ Erro fatal na sincronização:', error);
+   resultado.erros.push(`Fatal: ${error.message}`);
+   return resultado;
+  }
+ }
+
+ /**
+  * Envia painel para um canal específico (auxiliar)
+  */
+ async sendPanelToChannel(channel, channelName) {
+  try {
+   if (channelName === '📋╠registrar') {
+    const RegistrationPanel = require('./registrationPanel');
+    await RegistrationPanel.sendPanel(channel);
+   } else if (channelName === '🔧╠configurações') {
+    await this.sendConfigPanel(channel);
+   } else if (channelName === '📋╠lista-membros') {
+    const MemberListPanel = require('./memberListPanel');
+    await MemberListPanel.sendPanel(channel, this.guild);
+   } else if (channelName === '➕╠criar-evento') {
+    const EventPanel = require('./eventPanel');
+    await EventPanel.sendPanel(channel);
+   } else if (channelName === '🔍╠consultar-saldo') {
+    const ConsultarSaldoHandler = require('./consultarSaldoHandler');
+    await ConsultarSaldoHandler.sendPanel(channel);
+   } else if (channelName === '🏦╠saldo-guilda') {
+    const BalancePanelHandler = require('./balancePanelHandler');
+    await BalancePanelHandler.createAndSendPanel(channel, this.guild);
+   } else if (channelName === '💰╠venda-de-baú') {
+    const BauSaleHandler = require('./bauSaleHandler');
+    await BauSaleHandler.sendPanel(channel);
+   } else if (channelName === '📊╠painel-de-eventos') {
+    const EventStatsHandler = require('./eventStatsHandler');
+    await EventStatsHandler.sendPanel(channel, this.guild);
+   } else if (channelName === '👤╠perfil') {
+    const PerfilHandler = require('./perfilHandler');
+    await PerfilHandler.sendPerfilPanel(channel);
+   } else if (channelName === '🔮╠orb-xp') {
+    const OrbHandler = require('./orbHandler');
+    await OrbHandler.sendOrbPanel(channel);
+   }
+  } catch (error) {
+   console.error(`[SetupManager] Erro ao enviar painel para ${channelName}:`, error);
+  }
+ }
+
+ /**
+  * Atualiza painel em canal existente (auxiliar)
+  */
+ async updatePanelInChannel(channel, channelName) {
+  try {
+   // Verifica se já existe painel do bot
+   const messages = await channel.messages.fetch({ limit: 10 });
+   const hasPanel = messages.some(m => 
+    m.author.bot && 
+    m.embeds.length > 0 && 
+    !m.content.includes('❌') // Não conta mensagens de erro
+   );
+
+   if (!hasPanel) {
+    console.log(`⚠️ Canal ${channelName} existe mas sem painel. Criando...`);
+    await this.sendPanelToChannel(channel, channelName);
+   }
+  } catch (error) {
+   console.error(`[SetupManager] Erro ao verificar painel em ${channelName}:`, error);
+  }
  }
 }
 
