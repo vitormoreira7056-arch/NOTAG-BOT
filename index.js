@@ -17,6 +17,8 @@ const ConfigActions = require('./handlers/configActions');
 const GuildMemberRemoveHandler = require('./handlers/guildMemberRemove');
 const EventPanel = require('./handlers/eventPanel');
 const EventHandler = require('./handlers/eventHandler');
+const LootSplitHandler = require('./handlers/lootSplitHandler');
+const Database = require('./utils/database');
 
 // Criar cliente
 const client = new Client({
@@ -38,19 +40,22 @@ client.commands = new Collection();
 // Importar Comandos
 const instalarCommand = require('./commands/instalar');
 const desistalarCommand = require('./commands/desistalar');
+const atualizarCommand = require('./commands/atualizar');
 
 // Registrar comandos na coleção
 client.commands.set(instalarCommand.data.name, instalarCommand);
 client.commands.set(desistalarCommand.data.name, desistalarCommand);
+client.commands.set(atualizarCommand.data.name, atualizarCommand);
 
 // Inicializar variáveis globais
 global.registrosPendentes = new Map();
 global.registroTemp = new Map();
 global.guildConfig = new Map();
-global.blacklist = new Map(); // Blacklist de nicks
-global.historicoRegistros = new Map(); // Histórico de tentativas
-global.activeEvents = new Map(); // Eventos ativos
-global.client = client; // Referência global para o client
+global.blacklist = new Map();
+global.historicoRegistros = new Map();
+global.activeEvents = new Map();
+global.simulations = new Map();
+global.client = client;
 
 // Carregar dados persistidos (blacklist e histórico)
 try {
@@ -80,14 +85,16 @@ client.once(Events.ClientReady, async () => {
   console.log(`📅 Data de início: ${new Date().toLocaleString()}`);
 
   // Inicializar sistemas
-  RegistrationActions.initialize(); // Sistema de registro (inclui auto-update do painel a cada 1h)
-  EventHandler.initialize(); // Sistema de eventos
-  console.log('📝 Sistemas inicializados: Registro + Eventos');
+  Database.initialize();
+  RegistrationActions.initialize();
+  EventHandler.initialize();
+  console.log('📝 Sistemas inicializados: Database + Registro + Eventos');
 
   // Registrar Slash Commands
   const commands = [
     instalarCommand.data.toJSON(),
-    desistalarCommand.data.toJSON()
+    desistalarCommand.data.toJSON(),
+    atualizarCommand.data.toJSON()
   ];
 
   const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
@@ -227,12 +234,7 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      if (customId.startsWith('evt_pausar_')) {
-        const eventId = customId.replace('evt_pausar_', '');
-        await EventHandler.handlePausar(interaction, eventId);
-        return;
-      }
-
+      // 🎯 CORREÇÃO: Verificar evt_pausar_global_ ANTES de evt_pausar_
       if (customId.startsWith('evt_pausar_global_')) {
         const eventId = customId.replace('evt_pausar_global_', '');
         await EventHandler.handlePausarGlobal(interaction, eventId, true);
@@ -242,6 +244,13 @@ client.on(Events.InteractionCreate, async interaction => {
       if (customId.startsWith('evt_retomar_global_')) {
         const eventId = customId.replace('evt_retomar_global_', '');
         await EventHandler.handlePausarGlobal(interaction, eventId, false);
+        return;
+      }
+
+      // Handler de pausa individual (DEPOIS dos handlers globais)
+      if (customId.startsWith('evt_pausar_')) {
+        const eventId = customId.replace('evt_pausar_', '');
+        await EventHandler.handlePausar(interaction, eventId);
         return;
       }
 
@@ -260,6 +269,54 @@ client.on(Events.InteractionCreate, async interaction => {
       if (customId.startsWith('evt_finalizar_')) {
         const eventId = customId.replace('evt_finalizar_', '');
         await EventHandler.handleFinalizar(interaction, eventId);
+        return;
+      }
+
+      // SISTEMA DE LOOTSPLIT
+      if (customId.startsWith('loot_simular_')) {
+        const eventId = customId.replace('loot_simular_', '');
+        const modal = LootSplitHandler.createSimulationModal(eventId);
+        await interaction.showModal(modal);
+        return;
+      }
+
+      if (customId.startsWith('loot_enviar_')) {
+        const simulationId = customId.replace('loot_enviar_', '');
+        await LootSplitHandler.handleEnviar(interaction, simulationId);
+        return;
+      }
+
+      if (customId.startsWith('loot_recalcular_')) {
+        const simulationId = customId.replace('loot_recalcular_', '');
+        await LootSplitHandler.handleRecalcular(interaction, simulationId);
+        return;
+      }
+
+      if (customId.startsWith('loot_atualizar_part_')) {
+        await interaction.reply({
+          content: '⚙️ Use o comando `/atualizar [membro] [porcentagem]` para ajustar participação.',
+          ephemeral: true
+        });
+        return;
+      }
+
+      if (customId.startsWith('fin_aprovar_')) {
+        const simulationId = customId.replace('fin_aprovar_', '');
+        await LootSplitHandler.handleAprovacaoFinanceira(interaction, simulationId, true);
+        return;
+      }
+
+      if (customId.startsWith('fin_recusar_')) {
+        const simulationId = customId.replace('fin_recusar_', '');
+        await LootSplitHandler.handleAprovacaoFinanceira(interaction, simulationId, false);
+        return;
+      }
+
+      if (customId.startsWith('loot_arquivar_')) {
+        const parts = customId.replace('loot_arquivar_', '').split('_');
+        const eventId = parts[0];
+        const simulationId = parts[1];
+        await LootSplitHandler.handleArquivar(interaction, eventId, simulationId);
         return;
       }
 
@@ -361,6 +418,13 @@ client.on(Events.InteractionCreate, async interaction => {
       // SISTEMA DE EVENTOS
       if (interaction.customId === 'modal_criar_evento') {
         await EventHandler.createEvent(interaction);
+        return;
+      }
+
+      // SISTEMA DE LOOTSPLIT
+      if (interaction.customId.startsWith('modal_simular_evento_')) {
+        const eventId = interaction.customId.replace('modal_simular_evento_', '');
+        await LootSplitHandler.processSimulation(interaction, eventId);
         return;
       }
 

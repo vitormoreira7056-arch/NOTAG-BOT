@@ -74,6 +74,7 @@ class EventHandler {
         status: 'aguardando',
         participantes: new Map(),
         inicioTimestamp: null,
+        finalizadoEm: null,
         pausadoGlobal: false,
         trancado: false,
         messageId: null
@@ -145,20 +146,20 @@ class EventHandler {
       )
       .setColor(this.getStatusColor(eventData.status))
       .addFields(
-        { 
-          name: '⚠️ Requisitos', 
-          value: `\`\`\`${eventData.requisitos}\`\`\``, 
-          inline: false 
+        {
+          name: '⚠️ Requisitos',
+          value: `\`\`\`${eventData.requisitos}\`\`\``,
+          inline: false
         },
-        { 
-          name: `👥 Participantes (${eventData.participantes.size}) ${eventData.trancado ? '🔒' : ''}`, 
+        {
+          name: `👥 Participantes (${eventData.participantes.size}) ${eventData.trancado ? '🔒' : ''}`,
           value: participantesTexto,
-          inline: false 
+          inline: false
         }
       )
-      .setFooter({ 
-        text: `ID: ${eventData.id} • Use os botões abaixo`, 
-        iconURL: 'https://cdn.discordapp.com/emojis/1051892919120793710.webp?size=96' 
+      .setFooter({
+        text: `ID: ${eventData.id} • Use os botões abaixo`,
+        iconURL: 'https://cdn.discordapp.com/emojis/1051892919120793710.webp?size=96'
       })
       .setTimestamp();
 
@@ -182,19 +183,13 @@ class EventHandler {
     return embed;
   }
 
-  // 🎨 SISTEMA DE BOTÕES MODERNIZADO
   static createEventButtons(eventData, status) {
     const rows = [];
-    const isStaffOrCreator = (interaction) => {
-      return interaction.user.id === eventData.criadorId || 
-             interaction.member.roles.cache.some(r => ['ADM', 'Staff'].includes(r.name));
-    };
 
     // ROW 1: Ações de Participação (Todos podem usar)
     const rowParticipacao = new ActionRowBuilder();
 
     if (status === 'aguardando' || status === 'em_andamento' || status === 'pausado') {
-      // Botão Participar - Sempre visível se evento não estiver trancado
       rowParticipacao.addComponents(
         new ButtonBuilder()
           .setCustomId(`evt_participar_${eventData.id}`)
@@ -204,8 +199,6 @@ class EventHandler {
           .setDisabled(eventData.trancado || status === 'encerrado')
       );
 
-      // Botão Pausar Individual (só aparece se estiver participando)
-      // Nota: Este botão é dinâmico, mas aqui colocamos o base
       if (status === 'em_andamento' || status === 'pausado') {
         rowParticipacao.addComponents(
           new ButtonBuilder()
@@ -243,7 +236,6 @@ class EventHandler {
           .setEmoji('🗑️')
       );
     } else if (status === 'em_andamento') {
-      // 🎯 CORREÇÃO: Adicionado botão Trancar aqui!
       rowControles.addComponents(
         new ButtonBuilder()
           .setCustomId(`evt_pausar_global_${eventData.id}`)
@@ -285,23 +277,9 @@ class EventHandler {
       rows.push(rowControles);
     }
 
-    // ROW 3: Informações extras (opcional)
-    if (status !== 'encerrado') {
-      const rowInfo = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId(`evt_info_${eventData.id}`)
-          .setLabel('📊 Ver Meu Tempo')
-          .setStyle(ButtonStyle.Secondary)
-          .setEmoji('⏱️')
-          .setDisabled(true) // Por enquanto desabilitado, pode implementar depois
-      );
-      // rows.push(rowInfo); // Descomente quando implementar
-    }
-
     return rows;
   }
 
-  // 🎨 CORREÇÃO: Atualizar botões dinamicamente baseado no estado do participante
   static async updateEventPanel(interaction, eventData, userId = null) {
     try {
       const canal = interaction.guild.channels.cache.get(eventData.canalTextoId);
@@ -311,10 +289,6 @@ class EventHandler {
       if (!msg) return;
 
       const embed = this.createEventEmbed(eventData);
-
-      // Se tem userId, verifica se esse usuário específico está pausado para atualizar o botão dele
-      // Na prática, Discord não permite botões personalizados por usuário, então mantemos o texto genérico
-
       const botoes = this.createEventButtons(eventData, eventData.status);
 
       await msg.edit({
@@ -329,15 +303,14 @@ class EventHandler {
 
   static getStatusColor(status) {
     const cores = {
-      'aguardando': 0x3498DB,    // Azul
-      'em_andamento': 0xE74C3C,  // Vermelho
-      'pausado': 0xF39C12,       // Laranja
-      'encerrado': 0x2ECC71      // Verde
+      'aguardando': 0x3498DB,
+      'em_andamento': 0xE74C3C,
+      'pausado': 0xF39C12,
+      'encerrado': 0x2ECC71
     };
     return cores[status] || 0x95A5A6;
   }
 
-  // Handler: Participar do evento
   static async handleParticipar(interaction, eventId) {
     try {
       const eventData = global.activeEvents.get(eventId);
@@ -346,18 +319,17 @@ class EventHandler {
       }
 
       if (eventData.trancado) {
-        return interaction.reply({ 
-          content: '🔒 Este evento está trancado! Apenas membros já participantes podem interagir.', 
-          ephemeral: true 
+        return interaction.reply({
+          content: '🔒 Este evento está trancado! Apenas membros já participantes podem interagir.',
+          ephemeral: true
         });
       }
 
       const member = interaction.member;
       const canalVoz = interaction.guild.channels.cache.get(eventData.canalVozId);
 
-      // Verificar se já está participando
       if (eventData.participantes.has(member.id)) {
-        // Apenas mover para o canal
+        const participante = eventData.participantes.get(member.id);
         if (member.voice.channel && canalVoz) {
           try {
             await member.voice.setChannel(canalVoz.id);
@@ -366,19 +338,16 @@ class EventHandler {
           }
         }
 
-        // Se o evento já começou e ele não está com tempo iniciado, inicia agora
-        const participante = eventData.participantes.get(member.id);
         if (eventData.status === 'em_andamento' && !participante.pausado && !participante.tempoInicio) {
           participante.tempoInicio = Date.now();
         }
 
-        return interaction.reply({ 
-          content: `✅ Você já está no evento! ${eventData.status === 'em_andamento' ? 'Sua participação está sendo contada!' : ''}`, 
-          ephemeral: true 
+        return interaction.reply({
+          content: `✅ Você já está no evento! ${eventData.status === 'em_andamento' ? 'Sua participação está sendo contada!' : ''}`,
+          ephemeral: true
         });
       }
 
-      // Adicionar novo participante
       eventData.participantes.set(member.id, {
         nick: member.nickname || member.user.username,
         userId: member.id,
@@ -387,7 +356,6 @@ class EventHandler {
         pausado: false
       });
 
-      // Mover para canal de voz
       if (member.voice.channel && canalVoz) {
         try {
           await member.voice.setChannel(canalVoz.id);
@@ -398,13 +366,13 @@ class EventHandler {
 
       await this.updateEventPanel(interaction, eventData);
 
-      const mensagem = eventData.status === 'em_andamento' 
+      const mensagem = eventData.status === 'em_andamento'
         ? `🎮 Você entrou no evento **${eventData.nome}**!\n⏱️ Sua participação começou a ser contada agora!`
         : `✋ Você entrou na lista de participantes do evento **${eventData.nome}**!\n⏳ Aguarde o início do evento para começar a contagem.`;
 
-      await interaction.reply({ 
-        content: mensagem, 
-        ephemeral: true 
+      await interaction.reply({
+        content: mensagem,
+        ephemeral: true
       });
 
     } catch (error) {
@@ -413,7 +381,6 @@ class EventHandler {
     }
   }
 
-  // 🎯 CORREÇÃO: Handler de Pausar com lógica dinâmica
   static async handlePausar(interaction, eventId) {
     try {
       const eventData = global.activeEvents.get(eventId);
@@ -427,7 +394,6 @@ class EventHandler {
       }
 
       if (participante.pausado) {
-        // RETOMAR PARTICIPAÇÃO
         participante.pausado = false;
         if (eventData.status === 'em_andamento') {
           participante.tempoInicio = Date.now();
@@ -435,14 +401,12 @@ class EventHandler {
 
         await this.updateEventPanel(interaction, eventData);
 
-        // Atualizar a mensagem do botão na resposta (se possível)
-        await interaction.reply({ 
-          content: '▶️ **Participação retomada!**\nSua contagem de tempo voltou a contar.', 
-          ephemeral: true 
+        await interaction.reply({
+          content: '▶️ **Participação retomada!**\nSua contagem de tempo voltou a contar.',
+          ephemeral: true
         });
 
       } else {
-        // PAUSAR PARTICIPAÇÃO
         participante.pausado = true;
         if (participante.tempoInicio) {
           participante.tempoTotal += Date.now() - participante.tempoInicio;
@@ -451,9 +415,9 @@ class EventHandler {
 
         await this.updateEventPanel(interaction, eventData);
 
-        await interaction.reply({ 
-          content: '⏸️ **Participação pausada!**\nSua contagem de tempo foi pausada. Clique novamente para retomar.', 
-          ephemeral: true 
+        await interaction.reply({
+          content: '⏸️ **Participação pausada!**\nSua contagem de tempo foi pausada. Clique novamente para retomar.',
+          ephemeral: true
         });
       }
 
@@ -474,16 +438,15 @@ class EventHandler {
       const isStaff = interaction.member.roles.cache.some(r => ['ADM', 'Staff'].includes(r.name));
 
       if (!isCriador && !isStaff) {
-        return interaction.reply({ 
-          content: '❌ Apenas o criador ou staff pode iniciar!', 
-          ephemeral: true 
+        return interaction.reply({
+          content: '❌ Apenas o criador ou staff pode iniciar!',
+          ephemeral: true
         });
       }
 
       eventData.status = 'em_andamento';
       eventData.inicioTimestamp = Date.now();
 
-      // Iniciar contagem para todos os participantes presentes
       eventData.participantes.forEach(part => {
         if (!part.pausado) {
           part.tempoInicio = Date.now();
@@ -492,9 +455,9 @@ class EventHandler {
 
       await this.updateEventPanel(interaction, eventData);
 
-      await interaction.reply({ 
-        content: '🚀 **Evento iniciado!**\nA contagem de participação começou para todos os participantes!', 
-        ephemeral: true 
+      await interaction.reply({
+        content: '🚀 **Evento iniciado!**\nA contagem de participação começou para todos os participantes!',
+        ephemeral: true
       });
 
     } catch (error) {
@@ -514,16 +477,15 @@ class EventHandler {
       const isStaff = interaction.member.roles.cache.some(r => ['ADM', 'Staff'].includes(r.name));
 
       if (!isCriador && !isStaff) {
-        return interaction.reply({ 
-          content: '❌ Apenas o criador ou staff pode pausar/retomar!', 
-          ephemeral: true 
+        return interaction.reply({
+          content: '❌ Apenas o criador ou staff pode pausar/retomar!',
+          ephemeral: true
         });
       }
 
       if (pausar) {
         eventData.status = 'pausado';
         eventData.pausadoGlobal = true;
-        // Calcular tempo de todos os participantes ativos
         eventData.participantes.forEach(part => {
           if (!part.pausado && part.tempoInicio) {
             part.tempoTotal += Date.now() - part.tempoInicio;
@@ -534,7 +496,6 @@ class EventHandler {
       } else {
         eventData.status = 'em_andamento';
         eventData.pausadoGlobal = false;
-        // Retomar contagem para todos não pausados
         eventData.participantes.forEach(part => {
           if (!part.pausado) {
             part.tempoInicio = Date.now();
@@ -562,9 +523,9 @@ class EventHandler {
       const isStaff = interaction.member.roles.cache.some(r => ['ADM', 'Staff'].includes(r.name));
 
       if (!isCriador && !isStaff) {
-        return interaction.reply({ 
-          content: '❌ Apenas o criador ou staff pode trancar/destrancar!', 
-          ephemeral: true 
+        return interaction.reply({
+          content: '❌ Apenas o criador ou staff pode trancar/destrancar!',
+          ephemeral: true
         });
       }
 
@@ -572,11 +533,11 @@ class EventHandler {
 
       await this.updateEventPanel(interaction, eventData);
 
-      await interaction.reply({ 
-        content: eventData.trancado 
-          ? '🔒 **Evento trancado!** Novos participantes não poderão entrar.' 
-          : '🔓 **Evento destrancado!** Novos participantes podem entrar agora.', 
-        ephemeral: true 
+      await interaction.reply({
+        content: eventData.trancado
+          ? '🔒 **Evento trancado!** Novos participantes não poderão entrar.'
+          : '🔓 **Evento destrancado!** Novos participantes podem entrar agora.',
+        ephemeral: true
       });
 
     } catch (error) {
@@ -596,19 +557,17 @@ class EventHandler {
       const isStaff = interaction.member.roles.cache.some(r => ['ADM', 'Staff'].includes(r.name));
 
       if (!isCriador && !isStaff) {
-        return interaction.reply({ 
-          content: '❌ Apenas o criador ou staff pode cancelar!', 
-          ephemeral: true 
+        return interaction.reply({
+          content: '❌ Apenas o criador ou staff pode cancelar!',
+          ephemeral: true
         });
       }
 
-      // Deletar canal de voz
       const canalVoz = interaction.guild.channels.cache.get(eventData.canalVozId);
       if (canalVoz) {
         await canalVoz.delete('Evento cancelado');
       }
 
-      // Deletar mensagem do evento
       const canalParticipar = interaction.guild.channels.cache.get(eventData.canalTextoId);
       if (canalParticipar) {
         const msg = await canalParticipar.messages.fetch(eventData.messageId).catch(() => null);
@@ -617,9 +576,9 @@ class EventHandler {
 
       global.activeEvents.delete(eventId);
 
-      await interaction.reply({ 
-        content: '🗑️ **Evento cancelado** e todos os recursos foram liberados.', 
-        ephemeral: true 
+      await interaction.reply({
+        content: '🗑️ **Evento cancelado** e todos os recursos foram liberados.',
+        ephemeral: true
       });
 
     } catch (error) {
@@ -639,9 +598,9 @@ class EventHandler {
       const isStaff = interaction.member.roles.cache.some(r => ['ADM', 'Staff'].includes(r.name));
 
       if (!isCriador && !isStaff) {
-        return interaction.reply({ 
-          content: '❌ Apenas o criador ou staff pode finalizar!', 
-          ephemeral: true 
+        return interaction.reply({
+          content: '❌ Apenas o criador ou staff pode finalizar!',
+          ephemeral: true
         });
       }
 
@@ -653,6 +612,8 @@ class EventHandler {
           }
         });
       }
+
+      eventData.finalizadoEm = Date.now();
 
       // Mover todos para "Aguardando-Evento"
       const canalAguardando = interaction.guild.channels.cache.find(
@@ -674,7 +635,6 @@ class EventHandler {
         }
       }
 
-      // Deletar canal de voz
       if (canalVoz) {
         await canalVoz.delete('Evento finalizado');
       }
@@ -691,9 +651,9 @@ class EventHandler {
 
       global.activeEvents.delete(eventId);
 
-      await interaction.reply({ 
-        content: '✅ **Evento finalizado com sucesso!**\n📊 Resumo criado em eventos encerrados.', 
-        ephemeral: true 
+      await interaction.reply({
+        content: '✅ **Evento finalizado com sucesso!**\n📊 Resumo criado em eventos encerrados.',
+        ephemeral: true
       });
 
     } catch (error) {
@@ -709,19 +669,53 @@ class EventHandler {
       );
 
       if (!categoriaEncerrados) {
-        console.error('Categoria de eventos encerrados não encontrada');
+        console.error('[EventHandler] Categoria de eventos encerrados não encontrada');
         return;
       }
 
-      // Calcular estatísticas
-      let resumoParticipantes = '';
-      const participantesOrdenados = Array.from(eventData.participantes.entries())
-        .sort((a, b) => b[1].tempoTotal - a[1].tempoTotal);
+      // Buscar taxa da guilda
+      const config = global.guildConfig?.get(interaction.guild.id) || {};
+      const taxaGuilda = config.taxaGuilda || 10;
 
-      participantesOrdenados.forEach(([userId, data], index) => {
-        const tempoMinutos = Math.floor(data.tempoTotal / 1000 / 60);
-        resumoParticipantes += `${index + 1}. ${data.nick} — \`${tempoMinutos} min\`\n`;
+      // Calcular tempo total do evento
+      let tempoTotalEvento = 0;
+      if (eventData.inicioTimestamp && eventData.finalizadoEm) {
+        tempoTotalEvento = eventData.finalizadoEm - eventData.inicioTimestamp;
+      } else if (eventData.inicioTimestamp) {
+        tempoTotalEvento = Date.now() - eventData.inicioTimestamp;
+      }
+
+      const tempoTotalMin = Math.floor(tempoTotalEvento / 1000 / 60);
+
+      // Calcular tempo total de participação
+      let tempoTotalParticipacao = 0;
+      const participantesArray = Array.from(eventData.participantes.entries());
+
+      participantesArray.forEach(([userId, data]) => {
+        let tempo = data.tempoTotal || 0;
+        if (!data.pausado && data.tempoInicio) {
+          tempo += Date.now() - data.tempoInicio;
+        }
+        tempoTotalParticipacao += tempo;
       });
+
+      // Criar lista detalhada de participantes
+      const participantesDetalhados = participantesArray
+        .map(([userId, data], index) => {
+          let tempo = data.tempoTotal || 0;
+          if (!data.pausado && data.tempoInicio) {
+            tempo += Date.now() - data.tempoInicio;
+          }
+
+          const percentagem = tempoTotalParticipacao > 0 ? 
+            ((tempo / tempoTotalParticipacao) * 100).toFixed(2) : 
+            (100 / participantesArray.length).toFixed(2);
+
+          const tempoMin = Math.floor(tempo / 1000 / 60);
+
+          return `${index + 1}. **${data.nick}** — \`${tempoMin} min\` — **${percentagem}%**`;
+        })
+        .join('\n');
 
       const canalEncerrado = await interaction.guild.channels.create({
         name: `📁-${eventData.nome.substring(0, 20)}`,
@@ -736,38 +730,51 @@ class EventHandler {
         ]
       });
 
-      const tempoTotalEvento = eventData.inicioTimestamp 
-        ? Math.floor((Date.now() - eventData.inicioTimestamp) / 1000 / 60)
-        : 0;
-
+      // Criar embed moderno
       const embedResumo = new EmbedBuilder()
-        .setTitle('✅ ┃ EVENTO ENCERRADO')
+        .setTitle(`✅ ┃ ${eventData.nome.toUpperCase()}`)
         .setDescription(
-          `## ${eventData.nome}\n\n` +
+          `> ${eventData.descricao}\n\n` +
           `**👤 Criador:** <@${eventData.criadorId}>\n` +
-          `**🕐 Horário:** ${eventData.horario}\n` +
-          `**⏱️ Duração Total:** \`${tempoTotalEvento}\` minutos\n` +
-          `**👥 Total de Participantes:** \`${eventData.participantes.size}\``
+          `**🕐 Horário:** \`${eventData.horario}\`\n` +
+          `**⏱️ Duração Total:** \`${tempoTotalMin}\` minutos\n` +
+          `**👥 Total de Participantes:** \`${eventData.participantes.size}\`\n` +
+          `**📊 Taxa da Guilda:** \`${taxaGuilda}%\``
         )
         .setColor(0x2ECC71)
+        .setThumbnail(interaction.guild.iconURL({ dynamic: true }))
         .addFields(
           {
-            name: '📝 Descrição',
-            value: eventData.descricao,
-            inline: false
-          },
-          {
             name: '🏆 Ranking de Participação',
-            value: resumoParticipantes || 'Nenhum participante',
+            value: participantesDetalhados || '> Nenhum participante registrado',
             inline: false
           }
         )
+        .setFooter({
+          text: `ID: ${eventData.id} • Evento encerrado`,
+          iconURL: interaction.user.displayAvatarURL()
+        })
         .setTimestamp();
 
-      await canalEncerrado.send({ embeds: [embedResumo] });
+      // Botões de ação
+      const botoes = new ActionRowBuilder()
+        .addComponents(
+          new ButtonBuilder()
+            .setCustomId(`loot_simular_${eventData.id}`)
+            .setLabel('💰 Simular Evento')
+            .setStyle(ButtonStyle.Success)
+            .setEmoji('💎')
+        );
+
+      await canalEncerrado.send({
+        embeds: [embedResumo],
+        components: [botoes]
+      });
+
+      console.log(`[EventHandler] Created finished event channel: ${canalEncerrado.name}`);
 
     } catch (error) {
-      console.error('Erro ao criar canal de evento encerrado:', error);
+      console.error('[EventHandler] Error creating finished event channel:', error);
     }
   }
 }
