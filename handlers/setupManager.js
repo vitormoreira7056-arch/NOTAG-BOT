@@ -148,14 +148,35 @@ class SetupManager {
         for (const channelData of categoryData.channels) {
           const channel = await this.createChannel(channelData, category);
 
-          // Se for o canal de registro e foi criado agora, enviar painel
+          // Se for o canal de registro, enviar painel
           if (channel && channelData.name === '📋╠registrar') {
-            await this.sendRegistrationPanel(channel);
+            const RegistrationPanel = require('./registrationPanel');
+            const messages = await channel.messages.fetch({ limit: 10 });
+            const existePainel = messages.some(m =>
+              m.author.bot &&
+              m.embeds.length > 0 &&
+              m.embeds[0].title?.includes('Bem-vindo')
+            );
+            if (!existePainel) {
+              await RegistrationPanel.sendPanel(channel);
+            }
           }
 
           // Se for o canal de configurações, enviar painel de config
           if (channel && channelData.name === '🔧╠configurações') {
-            await this.sendConfigPanel(channel);
+            const existePainel = await this.checkExistingPanel(channel, 'CONFIGURAÇÕES');
+            if (!existePainel) {
+              await this.sendConfigPanel(channel);
+            }
+          }
+
+          // Se for o canal de lista de membros, enviar painel
+          if (channel && channelData.name === '📋╠lista-membros') {
+            const existePainel = await this.checkExistingPanel(channel, 'LISTA DE MEMBROS');
+            if (!existePainel) {
+              const MemberListPanel = require('./memberListPanel');
+              await MemberListPanel.sendPanel(channel, this.guild);
+            }
           }
         }
 
@@ -215,28 +236,28 @@ class SetupManager {
           // Verificar e recriar painéis se necessário
           if (channel) {
             if (channelData.name === '📋╠registrar') {
-              const messages = await channel.messages.fetch({ limit: 10 });
-              const existePainel = messages.some(m =>
-                m.author.bot &&
-                m.embeds.length > 0 &&
-                m.embeds[0].title?.includes('Bem-vindo')
-              );
+              const RegistrationPanel = require('./registrationPanel');
+              const existePainel = await this.checkExistingPanel(channel, 'Bem-vindo');
               if (!existePainel) {
-                const RegistrationPanel = require('./registrationPanel');
                 await RegistrationPanel.sendPanel(channel);
               }
             }
 
             if (channelData.name === '🔧╠configurações') {
-              const messages = await channel.messages.fetch({ limit: 10 });
-              const existePainel = messages.some(m =>
-                m.author.bot &&
-                m.embeds.length > 0 &&
-                m.embeds[0].title?.includes('CONFIGURAÇÕES')
-              );
+              const existePainel = await this.checkExistingPanel(channel, 'CONFIGURAÇÕES');
               if (!existePainel) {
-                const ConfigPanel = require('./configPanel');
-                await ConfigPanel.sendPanel(channel);
+                await this.sendConfigPanel(channel);
+              }
+            }
+
+            if (channelData.name === '📋╠lista-membros') {
+              const MemberListPanel = require('./memberListPanel');
+              const existePainel = await this.checkExistingPanel(channel, 'LISTA DE MEMBROS');
+              if (!existePainel) {
+                await MemberListPanel.sendPanel(channel, this.guild);
+              } else {
+                // Atualizar painel existente
+                await MemberListPanel.updatePanel(existePainel, this.guild);
               }
             }
           }
@@ -259,45 +280,17 @@ class SetupManager {
     };
   }
 
-  // Método para enviar painel de registro
-  async sendRegistrationPanel(channel) {
+  // Verificar se já existe painel no canal
+  async checkExistingPanel(channel, tituloContains) {
     try {
-      const embed = new EmbedBuilder()
-        .setTitle('🛡️ Bem-vindo à Guilda!')
-        .setDescription(
-          '> Olá, aventureiro! Para fazer parte da nossa guilda, você precisa se registrar.\n\n' +
-          '**Como funciona:**\n' +
-          '1️⃣ Clique no botão **Registrar** abaixo\n' +
-          '2️⃣ Preencha seus dados do Albion Online\n' +
-          '3️⃣ Selecione seu servidor e plataforma\n' +
-          '4️⃣ Aguarde a validação automática e aprovação da staff\n\n' +
-          '**Requisitos:**\n' +
-          '• Ter o jogo Albion Online\n' +
-          '• Informar seu nick exato do jogo\n' +
-          '• Estar na guilda (ou informar guilda atual)\n\n' +
-          '_Após o registro, nossa staff irá analisar e atribuir o cargo adequado._'
-        )
-        .setColor(0x3498DB)
-        .setFooter({ text: 'Sistema de Registro • Guild Bot' })
-        .setTimestamp();
-
-      const button = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId('btn_abrir_registro')
-          .setLabel('📝 Registrar')
-          .setStyle(ButtonStyle.Success)
-          .setEmoji('✨')
+      const messages = await channel.messages.fetch({ limit: 50 });
+      return messages.find(m =>
+        m.author.bot &&
+        m.embeds.length > 0 &&
+        m.embeds[0].title?.includes(tituloContains)
       );
-
-      await channel.send({
-        embeds: [embed],
-        components: [button]
-      });
-
-      console.log(`✅ Painel de registro enviado em ${channel.name}`);
     } catch (error) {
-      console.error('❌ Erro ao enviar painel de registro:', error);
-      this.errors.push(`Painel registro: ${error.message}`);
+      return null;
     }
   }
 
@@ -495,7 +488,6 @@ class SetupManager {
 
     // Canal de registro: Todos podem ver e clicar no botão
     if (channelName.includes('registrar')) {
-      // Remover restrições do everyone neste canal
       const everyonePerms = permissions.find(p => p.id === this.guild.id);
       if (everyonePerms) {
         everyonePerms.deny = everyonePerms.deny.filter(d => d !== PermissionFlagsBits.SendMessages);
@@ -505,7 +497,6 @@ class SetupManager {
 
     // Canal de configurações: Apenas ADM
     if (channelName.includes('configurações')) {
-      // Bloquear everyone completamente (só visualização)
       const everyonePerms = permissions.find(p => p.id === this.guild.id);
       if (everyonePerms) {
         everyonePerms.deny = [
@@ -519,7 +510,6 @@ class SetupManager {
         ];
       }
 
-      // Garantir que apenas ADM pode interagir
       if (admRole) {
         permissions.push({
           id: admRole.id,
@@ -541,7 +531,6 @@ class SetupManager {
           allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageMessages]
         });
       }
-      // Membros podem ver mas não escrever
       if (membroRole) {
         permissions.push({
           id: membroRole.id,

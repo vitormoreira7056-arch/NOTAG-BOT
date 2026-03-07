@@ -1,9 +1,12 @@
-const { 
-  EmbedBuilder, 
-  ActionRowBuilder, 
-  ButtonBuilder, 
+const {
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
   ButtonStyle,
-  PermissionFlagsBits 
+  PermissionFlagsBits,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle
 } = require('discord.js');
 
 class RegistrationActions {
@@ -11,7 +14,51 @@ class RegistrationActions {
   static hasApprovalPermission(member) {
     const allowedRoles = ['ADM', 'Staff', 'Recrutador'];
     return member.roles.cache.some(r => allowedRoles.includes(r.name)) ||
-           member.permissions.has(PermissionFlagsBits.Administrator);
+      member.permissions.has(PermissionFlagsBits.Administrator);
+  }
+
+  // Verificar se usuário já tem registro pendente ou é membro
+  static async checkExistingRegistration(guild, userId, nick) {
+    const errors = [];
+
+    // Verificar registro pendente
+    if (global.registrosPendentes?.has(userId)) {
+      errors.push('Você já tem um registro pendente de análise.');
+    }
+
+    // Verificar se já é membro do servidor
+    try {
+      const member = await guild.members.fetch(userId);
+      const cargosMembro = ['Membro', 'Aliança', 'Convidado'];
+      const temCargo = member.roles.cache.some(r => cargosMembro.includes(r.name));
+
+      if (temCargo) {
+        errors.push('Você já está registrado neste servidor.');
+      }
+
+      // Verificar se o nick já foi registrado por outra pessoa
+      for (const [uid, registro] of global.registrosPendentes.entries()) {
+        if (registro.nick.toLowerCase() === nick.toLowerCase() && uid !== userId) {
+          errors.push(`O nick "${nick}" já está em processo de registro por outro usuário.`);
+          break;
+        }
+      }
+
+      // Verificar se já existe membro com esse nick no servidor
+      const membros = await guild.members.fetch();
+      const membroComMesmoNick = membros.find(m =>
+        m.nickname && m.nickname.toLowerCase() === nick.toLowerCase()
+      );
+
+      if (membroComMesmoNick && membroComMesmoNick.id !== userId) {
+        errors.push(`O nick "${nick}" já está sendo usado por outro membro do Discord.`);
+      }
+
+    } catch (error) {
+      console.error('Erro ao verificar registro existente:', error);
+    }
+
+    return errors;
   }
 
   // Aprovar como Membro
@@ -93,23 +140,23 @@ class RegistrationActions {
       const cargoMembro = guild.roles.cache.find(r => r.name === 'Membro');
       const cargoAlianca = guild.roles.cache.find(r => r.name === 'Aliança');
       const cargoConvidado = guild.roles.cache.find(r => r.name === 'Convidado');
-      const cargoRemover = guild.roles.cache.find(r => r.name === 'Convidado'); // Remove Convidado se existir
+      const cargoRemover = guild.roles.cache.find(r => r.name === 'Convidado');
 
       let cargoAdicionar;
       let corEmbed;
 
-      switch(tipoCargo) {
+      switch (tipoCargo) {
         case 'Membro':
           cargoAdicionar = cargoMembro;
-          corEmbed = 0x2ECC71; // Verde
+          corEmbed = 0x2ECC71;
           break;
         case 'Aliança':
           cargoAdicionar = cargoAlianca;
-          corEmbed = 0xE67E22; // Laranja
+          corEmbed = 0xE67E22;
           break;
         case 'Convidado':
           cargoAdicionar = cargoConvidado;
-          corEmbed = 0x95A5A6; // Cinza
+          corEmbed = 0x95A5A6;
           break;
       }
 
@@ -122,17 +169,15 @@ class RegistrationActions {
 
       // Aplicar cargos
       try {
-        // Adicionar cargo novo
         await member.roles.add(cargoAdicionar);
 
-        // Se for membro ou aliança, remover convidado (se tiver)
         if ((tipoCargo === 'Membro' || tipoCargo === 'Aliança') && cargoRemover) {
           if (member.roles.cache.has(cargoRemover.id)) {
             await member.roles.remove(cargoRemover);
           }
         }
 
-        // Alterar nickname para o nick do jogo
+        // Alterar nickname
         await member.setNickname(registro.nick).catch(err => {
           console.log('Não foi possível alterar nickname:', err.message);
         });
@@ -159,14 +204,14 @@ class RegistrationActions {
         components: []
       });
 
-      // Enviar DM para o usuário
+      // Enviar DM
       await this.sendApprovalDM(member, registro, tipoCargo);
 
       // Remover do registro pendente
       global.registrosPendentes.delete(registro.userId);
 
-      // Log no canal de saída/membros se existir
-      await this.logAction(guild, registro, `Aprovado como ${tipoCargo} por ${interaction.user.tag}`);
+      // Atualizar painel de lista de membros
+      await this.updateMemberListPanel(guild);
 
     } catch (error) {
       console.error('Erro ao processar aprovação:', error);
@@ -177,8 +222,8 @@ class RegistrationActions {
     }
   }
 
-  // Recusar registro
-  static async rejectRegistration(interaction, registroId) {
+  // Criar modal de recusa com motivo
+  static async handleRejectRegistration(interaction, registroId) {
     if (!this.hasApprovalPermission(interaction.member)) {
       return interaction.reply({
         content: '❌ Você não tem permissão para recusar registros!',
@@ -194,42 +239,84 @@ class RegistrationActions {
       });
     }
 
+    // Criar modal para motivo da recusa
+    const modal = new ModalBuilder()
+      .setCustomId(`modal_recusar_registro_${registroId}`)
+      .setTitle('❌ Recusar Registro');
+
+    const motivoInput = new TextInputBuilder()
+      .setCustomId('motivo_recusa')
+      .setLabel('Informe o motivo da recusa')
+      .setPlaceholder('Ex: Nick incorreto, Guilda não encontrada, etc.')
+      .setStyle(TextInputStyle.Paragraph)
+      .setRequired(true)
+      .setMinLength(5)
+      .setMaxLength(500);
+
+    const row = new ActionRowBuilder().addComponents(motivoInput);
+    modal.addComponents(row);
+
+    await interaction.showModal(modal);
+  }
+
+  // Processar recusa com motivo
+  static async processRejectionWithReason(interaction, registroId) {
     try {
-      await interaction.deferUpdate();
+      const motivo = interaction.fields.getTextInputValue('motivo_recusa').trim();
+      const registro = this.findRegistroById(registroId);
+
+      if (!registro) {
+        return interaction.reply({
+          content: '❌ Registro não encontrado ou já processado!',
+          ephemeral: true
+        });
+      }
+
+      await interaction.deferReply({ ephemeral: true });
 
       const guild = interaction.guild;
       const member = await guild.members.fetch(registro.userId).catch(() => null);
 
-      // Atualizar mensagem
+      // Atualizar mensagem original
       const embedRecusado = new EmbedBuilder()
         .setTitle('❌ Registro Recusado')
         .setDescription(`Registro recusado por ${interaction.user}`)
         .setColor(0xE74C3C)
         .addFields(
           { name: '👤 Usuário', value: `<@${registro.userId}>`, inline: true },
-          { name: '🎮 Nick', value: registro.nick, inline: true }
+          { name: '🎮 Nick', value: registro.nick, inline: true },
+          { name: '📝 Motivo', value: motivo, inline: false }
         )
         .setTimestamp();
 
+      const channel = interaction.channel;
+      const message = await channel.messages.fetch(registro.messageId).catch(() => null);
+
+      if (message) {
+        await message.edit({
+          content: null,
+          embeds: [embedRecusado],
+          components: []
+        });
+      }
+
       await interaction.editReply({
-        content: null,
-        embeds: [embedRecusado],
-        components: []
+        content: '✅ Registro recusado com sucesso.'
       });
 
-      // Enviar DM
+      // Enviar DM com motivo
       if (member) {
-        await this.sendRejectionDM(member, registro);
+        await this.sendRejectionDM(member, registro, motivo);
       }
 
       // Remover do pendente
       global.registrosPendentes.delete(registro.userId);
 
-      // Log
-      await this.logAction(guild, registro, `Recusado por ${interaction.user.tag}`);
-
     } catch (error) {
       console.error('Erro ao recusar:', error);
+      await interaction.editReply({
+        content: '❌ Erro ao processar recusa.'
+      });
     }
   }
 
@@ -266,8 +353,8 @@ class RegistrationActions {
     }
   }
 
-  // Enviar DM de recusa
-  static async sendRejectionDM(member, registro) {
+  // Enviar DM de recusa com motivo
+  static async sendRejectionDM(member, registro, motivo) {
     try {
       const embed = new EmbedBuilder()
         .setTitle('❌ Registro Recusado')
@@ -275,9 +362,10 @@ class RegistrationActions {
         .setColor(0xE74C3C)
         .addFields(
           { name: '🎮 Nick Informado', value: registro.nick, inline: true },
-          { name: '💡 Motivo', value: 'Entre em contato com a staff para mais informações.', inline: false }
+          { name: '📝 Motivo da Recusa', value: motivo, inline: false },
+          { name: '💡 O que fazer?', value: 'Entre em contato com a staff se tiver dúvidas ou tente se registrar novamente com os dados corretos.', inline: false }
         )
-        .setFooter({ text: 'Tente novamente mais tarde ou fale com um Recrutador' })
+        .setFooter({ text: 'Tente novamente quando estiver correto' })
         .setTimestamp();
 
       await member.send({ embeds: [embed] });
@@ -286,22 +374,28 @@ class RegistrationActions {
     }
   }
 
-  // Log de ação
-  static async logAction(guild, registro, acao) {
-    const canalLog = guild.channels.cache.find(c => c.name === '🚪╠saída-membros');
-    if (!canalLog) return;
+  // Atualizar painel de lista de membros
+  static async updateMemberListPanel(guild) {
+    try {
+      const MemberListPanel = require('./memberListPanel');
+      const channel = guild.channels.cache.find(c => c.name === '📋╠lista-membros');
+      if (!channel) return;
 
-    const embed = new EmbedBuilder()
-      .setTitle('📝 Log de Registro')
-      .setDescription(acao)
-      .setColor(0x3498DB)
-      .addFields(
-        { name: 'Usuário', value: `<@${registro.userId}>`, inline: true },
-        { name: 'Nick', value: registro.nick, inline: true }
-      )
-      .setTimestamp();
+      const messages = await channel.messages.fetch({ limit: 10 });
+      const painel = messages.find(m =>
+        m.author.bot &&
+        m.embeds.length > 0 &&
+        m.embeds[0].title?.includes('LISTA DE MEMBROS')
+      );
 
-    await canalLog.send({ embeds: [embed] }).catch(() => {});
+      if (painel) {
+        await MemberListPanel.updatePanel(painel, guild);
+      } else {
+        await MemberListPanel.sendPanel(channel, guild);
+      }
+    } catch (error) {
+      console.error('Erro ao atualizar lista de membros:', error);
+    }
   }
 }
 

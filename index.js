@@ -13,6 +13,7 @@ require('dotenv').config();
 const RegistrationModal = require('./handlers/registrationModal');
 const RegistrationActions = require('./handlers/registrationActions');
 const ConfigActions = require('./handlers/configActions');
+const GuildMemberRemoveHandler = require('./handlers/guildMemberRemove');
 
 // Criar cliente
 const client = new Client({
@@ -22,7 +23,8 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.GuildVoiceStates,
     GatewayIntentBits.MessageContent,
-    GatewayIntentBits.DirectMessages
+    GatewayIntentBits.DirectMessages,
+    GatewayIntentBits.GuildPresences // Necessário para status online/offline
   ],
   partials: ['CHANNEL']
 });
@@ -154,10 +156,18 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // Recusar Registro
+      // Recusar Registro - Abre modal para motivo
       if (customId.startsWith('recusar_registro_')) {
         const regId = customId.replace('recusar_registro_', '');
-        await RegistrationActions.rejectRegistration(interaction, regId);
+        await RegistrationActions.handleRejectRegistration(interaction, regId);
+        return;
+      }
+
+      // Lista de membros - Atualizar
+      if (customId === 'btn_atualizar_lista_membros') {
+        await interaction.deferUpdate();
+        const MemberListPanel = require('./handlers/memberListPanel');
+        await MemberListPanel.updatePanel(interaction.message, interaction.guild);
         return;
       }
 
@@ -215,9 +225,32 @@ client.on(Events.InteractionCreate, async interaction => {
 
     // ==================== MODALS ====================
     if (interaction.isModalSubmit()) {
-      // Sistema de Registro
+      // Sistema de Registro - Novo registro
       if (interaction.customId === 'modal_registro') {
+        // Verificar duplicidade antes de processar
+        const nick = interaction.fields.getTextInputValue('reg_nick').trim();
+        const erros = await RegistrationActions.checkExistingRegistration(
+          interaction.guild, 
+          interaction.user.id, 
+          nick
+        );
+
+        if (erros.length > 0) {
+          await interaction.reply({
+            content: `❌ **Não foi possível iniciar o registro:**\n\n${erros.join('\n')}`,
+            ephemeral: true
+          });
+          return;
+        }
+
         await RegistrationModal.processRegistration(interaction, client);
+        return;
+      }
+
+      // Recusa de registro com motivo
+      if (interaction.customId.startsWith('modal_recusar_registro_')) {
+        const regId = interaction.customId.replace('modal_recusar_registro_', '');
+        await RegistrationActions.processRejectionWithReason(interaction, regId);
         return;
       }
 
@@ -242,6 +275,11 @@ client.on(Events.InteractionCreate, async interaction => {
       console.error('❌ Não foi possível responder ao usuário:', replyError);
     }
   }
+});
+
+// Evento: Membro sai do servidor (apenas para quem tinha cargo de registro)
+client.on(Events.GuildMemberRemove, async (member) => {
+  await GuildMemberRemoveHandler.handle(member);
 });
 
 // Handler de Erros Globais

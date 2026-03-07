@@ -1,14 +1,17 @@
-const { 
-  EmbedBuilder, 
-  ActionRowBuilder, 
-  ButtonBuilder, 
-  ButtonStyle 
+const {
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  AttachmentBuilder
 } = require('discord.js');
+const fs = require('fs');
+const path = require('path');
 
 class RegistrationPanel {
   // Criar embed do painel de boas-vindas
-  static createWelcomeEmbed() {
-    return new EmbedBuilder()
+  static async createWelcomeEmbed() {
+    const embed = new EmbedBuilder()
       .setTitle('🛡️ Bem-vindo à Guilda!')
       .setDescription(
         '> Olá, aventureiro! Para fazer parte da nossa guilda, você precisa se registrar.\n\n' +
@@ -24,9 +27,27 @@ class RegistrationPanel {
         '_Após o registro, nossa staff irá analisar e atribuir o cargo adequado._'
       )
       .setColor(0x3498DB)
-      .setThumbnail('https://cdn.discordapp.com/attachments/.../albion_logo.png') // Opcional: URL do logo
       .setFooter({ text: 'Sistema de Registro • Guild Bot' })
       .setTimestamp();
+
+    return embed;
+  }
+
+  // Verificar se imagem existe e retornar attachment
+  static async getImageAttachment() {
+    try {
+      const imagePath = path.join(__dirname, '..', 'png', 'registrar.png');
+
+      if (fs.existsSync(imagePath)) {
+        return new AttachmentBuilder(imagePath, { name: 'registrar.png' });
+      }
+
+      console.log('⚠️ Imagem png/registrar.png não encontrada');
+      return null;
+    } catch (error) {
+      console.error('Erro ao carregar imagem:', error);
+      return null;
+    }
   }
 
   // Criar botão de registrar
@@ -43,18 +64,50 @@ class RegistrationPanel {
   // Enviar painel no canal
   static async sendPanel(channel) {
     try {
-      const embed = this.createWelcomeEmbed();
+      const embed = await this.createWelcomeEmbed();
       const button = this.createRegisterButton();
+      const attachment = await this.getImageAttachment();
 
-      await channel.send({
+      const messageOptions = {
         embeds: [embed],
         components: [button]
-      });
+      };
 
+      if (attachment) {
+        messageOptions.files = [attachment];
+        embed.setImage('attachment://registrar.png');
+      }
+
+      await channel.send(messageOptions);
       console.log(`✅ Painel de registro enviado em ${channel.name}`);
       return true;
     } catch (error) {
-      console.error('Erro ao enviar painel:', error);
+      console.error('❌ Erro ao enviar painel:', error);
+      return false;
+    }
+  }
+
+  // Atualizar painel existente
+  static async updatePanel(message) {
+    try {
+      const embed = await this.createWelcomeEmbed();
+      const button = this.createRegisterButton();
+      const attachment = await this.getImageAttachment();
+
+      const messageOptions = {
+        embeds: [embed],
+        components: [button]
+      };
+
+      if (attachment) {
+        messageOptions.files = [attachment];
+        embed.setImage('attachment://registrar.png');
+      }
+
+      await message.edit(messageOptions);
+      return true;
+    } catch (error) {
+      console.error('❌ Erro ao atualizar painel:', error);
       return false;
     }
   }
