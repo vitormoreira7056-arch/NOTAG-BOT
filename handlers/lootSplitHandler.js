@@ -1,13 +1,13 @@
-const { 
-  EmbedBuilder, 
-  ActionRowBuilder, 
-  ButtonBuilder, 
+const {
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
   ButtonStyle,
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
   ChannelType,
-  PermissionFlagsBits 
+  PermissionFlagsBits
 } = require('discord.js');
 const Database = require('../utils/database');
 
@@ -82,22 +82,28 @@ class LootSplitHandler {
         });
       }
 
-      // Buscar evento
-      const eventData = global.activeEvents.get(eventId);
+      // Buscar em activeEvents OU finishedEvents
+      let eventData = global.activeEvents.get(eventId);
+      if (!eventData) {
+        eventData = global.finishedEvents?.get(eventId);
+      }
+
       if (!eventData) {
         return interaction.reply({
-          content: '❌ Evento não encontrado!',
+          content: '❌ Evento não encontrado! Pode ter sido finalizado há muito tempo.',
           ephemeral: true
         });
       }
 
       // Buscar taxa da guilda
       const config = global.guildConfig?.get(interaction.guild.id) || {};
-      const taxaGuilda = config.taxaGuilda || 10; // Padrão 10%
+      const taxaGuilda = config.taxaGuilda || 10;
 
       // Calcular tempo total
       let tempoTotalEvento = 0;
-      if (eventData.inicioTimestamp) {
+      if (eventData.inicioTimestamp && eventData.finalizadoEm) {
+        tempoTotalEvento = eventData.finalizadoEm - eventData.inicioTimestamp;
+      } else if (eventData.inicioTimestamp) {
         tempoTotalEvento = Date.now() - eventData.inicioTimestamp;
       }
 
@@ -107,13 +113,12 @@ class LootSplitHandler {
 
       participantes.forEach(([userId, data]) => {
         let tempo = data.tempoTotal || 0;
-        if (!data.pausado && data.tempoInicio && eventData.status === 'em_andamento') {
+        if (!eventData.finalizadoEm && !data.pausado && data.tempoInicio && eventData.status === 'em_andamento') {
           tempo += Date.now() - data.tempoInicio;
         }
         tempoTotalParticipacao += tempo;
       });
 
-      // Se não houver tempo de participação, usar tempo total do evento * número de participantes
       if (tempoTotalParticipacao === 0) {
         tempoTotalParticipacao = tempoTotalEvento * participantes.length;
       }
@@ -125,12 +130,12 @@ class LootSplitHandler {
 
       const distribuicao = participantes.map(([userId, data]) => {
         let tempoParticipacao = data.tempoTotal || 0;
-        if (!data.pausado && data.tempoInicio && eventData.status === 'em_andamento') {
+        if (!eventData.finalizadoEm && !data.pausado && data.tempoInicio && eventData.status === 'em_andamento') {
           tempoParticipacao += Date.now() - data.tempoInicio;
         }
 
-        const percentagem = tempoTotalParticipacao > 0 ? 
-          (tempoParticipacao / tempoTotalParticipacao) : 
+        const percentagem = tempoTotalParticipacao > 0 ?
+          (tempoParticipacao / tempoTotalParticipacao) :
           (1 / participantes.length);
 
         const valorReceber = Math.floor(valorDistribuir * percentagem);
@@ -209,11 +214,11 @@ class LootSplitHandler {
       .setTitle('💰 SIMULAÇÃO DE DIVISÃO DE LOOT')
       .setDescription(
         `## ${eventData.nome}\n\n` +
-        `**💎 Valor Total:** \\`${simulation.valorTotal.toLocaleString()}\\`\n` +
-        `**🎒 Sacos:** \\`${simulation.valorSacos.toLocaleString()}\\`\n` +
-        `**🔧 Reparo:** \\`${simulation.valorReparo.toLocaleString()}\\`\n` +
-        `**📊 Taxa Guilda (${simulation.taxaGuilda}%):** \\`${simulation.valorTaxa.toLocaleString()}\\`\n` +
-        `**💵 Valor a Distribuir:** \\`${simulation.valorDistribuir.toLocaleString()}\\``
+        `**💎 Valor Total:** \`${simulation.valorTotal.toLocaleString()}\`\n` +
+        `**🎒 Sacos:** \`${simulation.valorSacos.toLocaleString()}\`\n` +
+        `**🔧 Reparo:** \`${simulation.valorReparo.toLocaleString()}\`\n` +
+        `**📊 Taxa Guilda (${simulation.taxaGuilda}%):** \`${simulation.valorTaxa.toLocaleString()}\`\n` +
+        `**💵 Valor a Distribuir:** \`${simulation.valorDistribuir.toLocaleString()}\``
       )
       .setColor(0xF1C40F)
       .setTimestamp();
@@ -221,7 +226,7 @@ class LootSplitHandler {
     // Listar participantes e valores
     const listaParticipantes = simulation.distribuicao.map(p => {
       const tempoMin = Math.floor(p.tempo / 1000 / 60);
-      return `${p.nick}: \\`${p.valor.toLocaleString()}\\` (${p.percentagem}%) - ${tempoMin}min`;
+      return `${p.nick}: \`${p.valor.toLocaleString()}\` (${p.percentagem}%) - ${tempoMin}min`;
     }).join('\n');
 
     embed.addFields({
@@ -246,7 +251,7 @@ class LootSplitHandler {
         });
       }
 
-      const eventData = global.activeEvents.get(simulation.eventId);
+      const eventData = global.activeEvents.get(simulation.eventId) || global.finishedEvents?.get(simulation.eventId);
 
       // Buscar canal financeiro
       const canalFinanceiro = interaction.guild.channels.cache.find(
@@ -266,9 +271,9 @@ class LootSplitHandler {
         .setDescription(
           `**Evento:** ${eventData?.nome || 'Desconhecido'}\n` +
           `**Criador:** <@${simulation.criadorId}>\n` +
-          `**Valor Total:** \\`${simulation.valorTotal.toLocaleString()}\\`\n` +
-          `**Taxa Guilda:** \\`${simulation.valorTaxa.toLocaleString()}\\`\n` +
-          `**A Distribuir:** \\`${simulation.valorDistribuir.toLocaleString()}\\``
+          `**Valor Total:** \`${simulation.valorTotal.toLocaleString()}\`\n` +
+          `**Taxa Guilda:** \`${simulation.valorTaxa.toLocaleString()}\`\n` +
+          `**A Distribuir:** \`${simulation.valorDistribuir.toLocaleString()}\``
         )
         .setColor(0xE74C3C)
         .setTimestamp();
@@ -318,7 +323,7 @@ class LootSplitHandler {
         });
       }
 
-      const eventData = global.activeEvents.get(simulation.eventId);
+      const eventData = global.activeEvents.get(simulation.eventId) || global.finishedEvents?.get(simulation.eventId);
       if (!eventData) {
         return interaction.reply({
           content: '❌ Evento não encontrado!',
@@ -326,10 +331,8 @@ class LootSplitHandler {
         });
       }
 
-      // Abrir modal novamente com valores preenchidos
+      // Abrir modal novamente
       const modal = this.createSimulationModal(simulation.eventId);
-
-      // Preencher valores (simulado - Discord não permite prefill em modais programaticamente)
       await interaction.showModal(modal);
 
     } catch (error) {
@@ -407,8 +410,8 @@ class LootSplitHandler {
                 new EmbedBuilder()
                   .setTitle('💰 PAGAMENTO RECEBIDO')
                   .setDescription(
-                    `Você recebeu \\`${participante.valor.toLocaleString()}\\` do evento!\n` +
-                    `Novo saldo: \\`${Database.getUser(participante.userId).saldo.toLocaleString()}\\``
+                    `Você recebeu \`${participante.valor.toLocaleString()}\` do evento!\n` +
+                    `Novo saldo: \`${Database.getUser(participante.userId).saldo.toLocaleString()}\``
                   )
                   .setColor(0x57F287)
                   .setTimestamp()
@@ -452,17 +455,18 @@ class LootSplitHandler {
         const embedConfirmado = new EmbedBuilder()
           .setTitle('✅ PAGAMENTO CONFIRMADO')
           .setDescription(
-            `**Evento pago por:** <@${interaction.user.id}>\\n` +
-            `**Total distribuído:** \\`${simulation.valorDistribuir.toLocaleString()}\\`\\n` +
-            `**Taxa guilda:** \\`${simulation.valorTaxa.toLocaleString()}\\``
+            `**Evento pago por:** <@${interaction.user.id}>\n` +
+            `**Total distribuído:** \`${simulation.valorDistribuir.toLocaleString()}\`\n` +
+            `**Taxa guilda:** \`${simulation.valorTaxa.toLocaleString()}\``
           )
           .setColor(0x2ECC71)
           .setTimestamp();
 
+        // 🎯 CORREÇÃO: Usar apenas simulationId no customId (máx 100 caracteres)
         const botaoArquivar = new ActionRowBuilder()
           .addComponents(
             new ButtonBuilder()
-              .setCustomId(`loot_arquivar_${simulation.eventId}_${simulation.id}`)
+              .setCustomId(`loot_arquivar_${simulationId}`)
               .setLabel('📁 Arquivar Evento')
               .setStyle(ButtonStyle.Primary)
           );
@@ -481,10 +485,10 @@ class LootSplitHandler {
             new EmbedBuilder()
               .setTitle('📝 LOG: PAGAMENTO DE EVENTO')
               .setDescription(
-                `**Evento:** ${simulation.eventId}\\n` +
-                `**Aprovado por:** <@${interaction.user.id}>\\n` +
-                `**Valor Total:** \\`${simulation.valorTotal.toLocaleString()}\\`\\n` +
-                `**Participantes:** ${simulation.distribuicao.length}\\n` +
+                `**Evento:** ${simulation.eventId}\n` +
+                `**Aprovado por:** <@${interaction.user.id}>\n` +
+                `**Valor Total:** \`${simulation.valorTotal.toLocaleString()}\`\n` +
+                `**Participantes:** ${simulation.distribuicao.length}\n` +
                 `**Data:** <t:${Math.floor(Date.now() / 1000)}:F>`
               )
               .setColor(0x3498DB)
@@ -505,14 +509,24 @@ class LootSplitHandler {
   // Handler para arquivar evento
   static async handleArquivar(interaction, eventId, simulationId) {
     try {
-      console.log(`[LootSplit] Archiving event ${eventId}`);
+      console.log(`[LootSplit] Archiving event ${eventId} with simulation ${simulationId}`);
 
+      // 🎯 CORREÇÃO: Se não recebeu eventId, extrair da simulação
       const simulation = global.simulations?.get(simulationId);
-      const eventData = global.activeEvents.get(eventId);
+      if (!simulation) {
+        return interaction.reply({ 
+          content: '❌ Simulação não encontrada!', 
+          ephemeral: true 
+        });
+      }
+
+      // Usar eventId da simulação se não foi passado
+      const actualEventId = eventId || simulation.eventId;
+      const eventData = global.activeEvents.get(actualEventId) || global.finishedEvents?.get(actualEventId);
 
       // Adicionar ao histórico
       Database.addEventHistory({
-        eventId: eventId,
+        eventId: actualEventId,
         simulationId: simulationId,
         guildId: interaction.guild.id,
         arquivadoPor: interaction.user.id,

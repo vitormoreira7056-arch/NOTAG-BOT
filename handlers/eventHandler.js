@@ -649,6 +649,14 @@ class EventHandler {
         if (msg) await msg.delete();
       }
 
+      // 🎯 CORREÇÃO: Salvar em eventos finalizados antes de deletar
+      if (!global.finishedEvents) global.finishedEvents = new Map();
+      global.finishedEvents.set(eventId, {
+        ...eventData,
+        finalizadoEm: Date.now()
+      });
+      console.log(`[EventHandler] Event ${eventId} saved to finishedEvents`);
+
       global.activeEvents.delete(eventId);
 
       await interaction.reply({

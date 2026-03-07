@@ -54,6 +54,7 @@ global.guildConfig = new Map();
 global.blacklist = new Map();
 global.historicoRegistros = new Map();
 global.activeEvents = new Map();
+global.finishedEvents = new Map();
 global.simulations = new Map();
 global.client = client;
 
@@ -312,11 +313,19 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
+      // 🎯 CORREÇÃO: Handler do botão arquivar (apenas simulationId)
       if (customId.startsWith('loot_arquivar_')) {
-        const parts = customId.replace('loot_arquivar_', '').split('_');
-        const eventId = parts[0];
-        const simulationId = parts[1];
-        await LootSplitHandler.handleArquivar(interaction, eventId, simulationId);
+        const simulationId = customId.replace('loot_arquivar_', '');
+        const simulation = global.simulations?.get(simulationId);
+
+        if (simulation) {
+          await LootSplitHandler.handleArquivar(interaction, simulation.eventId, simulationId);
+        } else {
+          await interaction.reply({ 
+            content: '❌ Simulação não encontrada!', 
+            ephemeral: true 
+          });
+        }
         return;
       }
 
