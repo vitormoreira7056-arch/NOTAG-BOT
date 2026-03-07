@@ -14,5 +14,21 @@
     "guildId": "715696550453706844",
     "eventId": "event_1772905097882_715328489938616332",
     "timestamp": 1772905220718
+  },
+  {
+    "type": "credito",
+    "userId": "715328489938616332",
+    "amount": 630000,
+    "reason": "loot_split_evento",
+    "timestamp": 1772905994017
+  },
+  {
+    "type": "credito",
+    "userId": "GUILD_BANK",
+    "amount": 70000,
+    "reason": "taxa_guilda",
+    "guildId": "715696550453706844",
+    "eventId": "event_1772905890403_715328489938616332",
+    "timestamp": 1772905994407
   }
 ]
