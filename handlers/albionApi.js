@@ -3,22 +3,33 @@ const https = require('https');
 class AlbionAPI {
   constructor() {
     this.baseUrl = 'gameinfo.albiononline.com';
+    this.timeout = 30000; // 30 segundos
   }
 
-  // Buscar jogador por nome (retorna o primeiro resultado correspondente)
-  async searchPlayer(playerName, server = 'europe') {
+  async searchPlayer(playerName, server = 'europe', retries = 3) {
     return new Promise((resolve, reject) => {
       const encodedName = encodeURIComponent(playerName);
+      const url = `https://${this.baseUrl}/api/gameinfo/search?q=${encodedName}`;
+
+      console.log(`\n🔍 === BUSCANDO JOGADOR ===`);
+      console.log(`URL: ${url}`);
+      console.log(`Nick: ${playerName}`);
+      console.log(`Servidor: ${server}`);
+
       const options = {
         hostname: this.baseUrl,
         path: `/api/gameinfo/search?q=${encodedName}`,
         method: 'GET',
         headers: {
-          'Accept': 'application/json'
+          'Accept': 'application/json',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
       };
 
       const req = https.request(options, (res) => {
+        console.log(`📡 Status Code: ${res.statusCode}`);
+        console.log(`📡 Headers: ${JSON.stringify(res.headers)}`);
+
         let data = '';
 
         res.on('data', (chunk) => {
@@ -27,141 +38,148 @@ class AlbionAPI {
 
         res.on('end', () => {
           try {
-            const jsonData = JSON.parse(data);
+            console.log(`📥 Resposta raw: ${data.substring(0, 500)}`);
 
-            // Filtrar apenas players que correspondem exatamente ao nome (case insensitive)
+            if (!data || data.trim() === '') {
+              console.log('⚠️ Resposta VAZIA da API');
+              if (retries > 0) {
+                console.log(`🔄 Retry ${retries}...`);
+                setTimeout(() => {
+                  this.searchPlayer(playerName, server, retries - 1)
+                    .then(resolve)
+                    .catch(reject);
+                }, 3000);
+                return;
+              }
+              resolve(null);
+              return;
+            }
+
+            const jsonData = JSON.parse(data);
+            console.log(`📊 Estrutura da resposta:`, Object.keys(jsonData));
+
             const players = jsonData.players || [];
+            console.log(`👥 Total players encontrados: ${players.length}`);
+
+            if (players.length > 0) {
+              console.log(`👤 Primeiros 3 resultados:`);
+              players.slice(0, 3).forEach((p, i) => {
+                console.log(`  ${i+1}. ${p.Name} (Guild: ${p.GuildName || 'N/A'})`);
+              });
+            }
+
+            if (players.length === 0) {
+              console.log(`❌ Nenhum player encontrado para "${playerName}"`);
+              resolve(null);
+              return;
+            }
+
+            // Busca exata case-insensitive
             const exactMatch = players.find(p => 
-              p.Name.toLowerCase() === playerName.toLowerCase()
+              p.Name && p.Name.toLowerCase() === playerName.toLowerCase()
             );
 
-            // Se não encontrar exato, pega o primeiro similar
-            const player = exactMatch || players[0];
-
-            if (player) {
+            if (exactMatch) {
+              console.log(`✅ Match exato encontrado: ${exactMatch.Name}`);
               resolve({
-                id: player.Id,
-                name: player.Name,
-                guildId: player.GuildId || null,
-                guildName: player.GuildName || null,
-                allianceId: player.AllianceId || null,
-                allianceName: player.AllianceName || null,
+                id: exactMatch.Id,
+                name: exactMatch.Name,
+                guildId: exactMatch.GuildId || null,
+                guildName: exactMatch.GuildName || null,
+                allianceId: exactMatch.AllianceId || null,
+                allianceName: exactMatch.AllianceName || null,
                 server: server
               });
-            } else {
-              resolve(null);
+              return;
             }
+
+            // Se não achou exato, pega o primeiro
+            const player = players[0];
+            console.log(`⚠️ Usando primeiro resultado: ${player.Name}`);
+            resolve({
+              id: player.Id,
+              name: player.Name,
+              guildId: player.GuildId || null,
+              guildName: player.GuildName || null,
+              allianceId: player.AllianceId || null,
+              allianceName: player.AllianceName || null,
+              server: server
+            });
+
           } catch (error) {
+            console.error(`❌ Erro parse JSON:`, error.message);
+            console.error(`📄 Data recebida:`, data);
+            if (retries > 0) {
+              setTimeout(() => {
+                this.searchPlayer(playerName, server, retries - 1)
+                  .then(resolve)
+                  .catch(reject);
+              }, 3000);
+              return;
+            }
             reject(error);
           }
         });
       });
 
       req.on('error', (error) => {
-        reject(error);
-      });
-
-      req.setTimeout(10000, () => {
-        req.destroy();
-        reject(new Error('Timeout na requisição à API do Albion'));
-      });
-
-      req.end();
-    });
-  }
-
-  // Buscar detalhes da guilda incluindo membros
-  async getGuildMembers(guildId) {
-    return new Promise((resolve, reject) => {
-      const options = {
-        hostname: this.baseUrl,
-        path: `/api/gameinfo/guilds/${guildId}/members`,
-        method: 'GET',
-        headers: {
-          'Accept': 'application/json'
+        console.error(`❌ Erro de rede:`, error.message);
+        if (retries > 0) {
+          console.log(`🔄 Retry após erro...`);
+          setTimeout(() => {
+            this.searchPlayer(playerName, server, retries - 1)
+              .then(resolve)
+              .catch(reject);
+          }, 3000);
+          return;
         }
-      };
-
-      const req = https.request(options, (res) => {
-        let data = '';
-
-        res.on('data', (chunk) => {
-          data += chunk;
-        });
-
-        res.on('end', () => {
-          try {
-            const jsonData = JSON.parse(data);
-            resolve(jsonData || []);
-          } catch (error) {
-            reject(error);
-          }
-        });
-      });
-
-      req.on('error', (error) => {
         reject(error);
       });
 
-      req.setTimeout(10000, () => {
+      req.setTimeout(this.timeout, () => {
+        console.error(`⏱️ Timeout (${this.timeout}ms)`);
         req.destroy();
-        reject(new Error('Timeout na requisição à API do Albion'));
+        if (retries > 0) {
+          console.log(`🔄 Retry após timeout...`);
+          this.searchPlayer(playerName, server, retries - 1)
+            .then(resolve)
+            .catch(reject);
+          return;
+        }
+        reject(new Error('Timeout'));
       });
 
       req.end();
     });
   }
 
-  // Verificar se jogador está na guilda específica
   async verifyPlayerGuild(playerName, guildName, server = 'europe') {
     try {
-      // 1. Buscar jogador
+      console.log(`\n🚀 === INICIANDO VERIFICAÇÃO ===`);
+      console.log(`Player: "${playerName}"`);
+      console.log(`Guilda informada: "${guildName}"`);
+
       const player = await this.searchPlayer(playerName, server);
+
       if (!player) {
+        console.log(`❌ Player não encontrado na API`);
         return {
           valid: false,
-          error: 'Jogador não encontrado no servidor selecionado',
+          error: `Jogador "${playerName}" não encontrado no servidor ${server}. O nick está correto?`,
           details: null
         };
       }
 
-      // 2. Se informou guilda, verificar se está nela
-      if (guildName && guildName.trim() !== '' && guildName.toLowerCase() !== 'nenhuma') {
-        if (!player.guildId) {
-          return {
-            valid: false,
-            error: `Jogador "${playerName}" não está em nenhuma guilda atualmente`,
-            details: player
-          };
-        }
+      console.log(`✅ Player encontrado: ${player.name}`);
+      console.log(`   Guilda na API: ${player.guildName || 'Sem guilda'}`);
+      console.log(`   Guilda informada: ${guildName}`);
 
-        // Buscar membros da guilda para confirmar
-        const members = await this.getGuildMembers(player.guildId);
-        const isMember = members.some(m => 
-          m.Name.toLowerCase() === playerName.toLowerCase()
-        );
-
-        if (!isMember) {
-          return {
-            valid: false,
-            error: `Jogador "${playerName}" não encontrado na guilda "${player.guildName || guildName}"`,
-            details: player
-          };
-        }
-
-        // Verificar se o nome da guilda bate (parcialmente)
-        const guildMatch = player.guildName && 
-          (player.guildName.toLowerCase().includes(guildName.toLowerCase()) ||
-           guildName.toLowerCase().includes(player.guildName.toLowerCase()));
-
-        if (!guildMatch) {
-          return {
-            valid: false,
-            error: `Guilda mismatch. Jogador está em "${player.guildName}", mas informou "${guildName}"`,
-            details: player
-          };
-        }
-
+      // Se não informou guilda ou informou "nenhuma"
+      if (!guildName || 
+          guildName.trim() === '' || 
+          guildName.toLowerCase() === 'nenhuma' ||
+          guildName.toLowerCase() === 'none') {
+        console.log(`✅ Validação básica OK (sem guilda)`);
         return {
           valid: true,
           error: null,
@@ -169,7 +187,34 @@ class AlbionAPI {
         };
       }
 
-      // Se não informou guilda ou informou "nenhuma", apenas valida existência do jogador
+      // Se o player não tem guilda na API mas informou uma
+      if (!player.guildId) {
+        return {
+          valid: false,
+          error: `O jogador "${playerName}" não está em nenhuma guilda no Albion, mas você informou "${guildName}".`,
+          details: player
+        };
+      }
+
+      // Comparar guildas
+      const playerGuildLower = (player.guildName || '').toLowerCase();
+      const inputGuildLower = guildName.toLowerCase();
+
+      console.log(`🔍 Comparando: "${playerGuildLower}" vs "${inputGuildLower}"`);
+
+      const match = playerGuildLower === inputGuildLower ||
+                    playerGuildLower.includes(inputGuildLower) ||
+                    inputGuildLower.includes(playerGuildLower);
+
+      if (!match) {
+        return {
+          valid: false,
+          error: `Guilda incorreta. Você informou "${guildName}" mas o jogador está na guilda "${player.guildName}" no Albion.`,
+          details: player
+        };
+      }
+
+      console.log(`✅ Verificação completa OK!`);
       return {
         valid: true,
         error: null,
@@ -177,9 +222,10 @@ class AlbionAPI {
       };
 
     } catch (error) {
+      console.error(`❌ Erro na verificação:`, error);
       return {
         valid: false,
-        error: `Erro na verificação: ${error.message}`,
+        error: `Erro na API: ${error.message}. Tente novamente.`,
         details: null
       };
     }

@@ -148,9 +148,14 @@ class SetupManager {
         for (const channelData of categoryData.channels) {
           const channel = await this.createChannel(channelData, category);
 
-          // Se for o canal de registro e foi criado agora, enviar painel automaticamente
-          if (channel && channelData.name === '📋╠registrar' && !this.existingChannels.includes(channelData.name)) {
+          // Se for o canal de registro e foi criado agora, enviar painel
+          if (channel && channelData.name === '📋╠registrar') {
             await this.sendRegistrationPanel(channel);
+          }
+
+          // Se for o canal de configurações, enviar painel de config
+          if (channel && channelData.name === '🔧╠configurações') {
+            await this.sendConfigPanel(channel);
           }
         }
 
@@ -163,6 +168,89 @@ class SetupManager {
     return {
       success: true,
       message: `Estrutura instalada com sucesso!\n🆕 ${this.createdChannels.length} canais criados\n📁 ${this.createdCategories.length} categorias criadas\n🎭 ${this.rolesChecked.length} cargos verificados`,
+      createdChannels: this.createdChannels,
+      createdCategories: this.createdCategories,
+      existingChannels: this.existingChannels,
+      rolesChecked: this.rolesChecked,
+      errors: this.errors
+    };
+  }
+
+  // Método update (para o botão Atualizar Bot)
+  async update() {
+    console.log('🔄 Iniciando atualização da estrutura...');
+
+    // Verificar/criar cargos
+    await this.setupRoles();
+
+    // Verificar/criar canais e categorias
+    const structure = this.getServerStructure();
+
+    for (const categoryData of structure) {
+      try {
+        let category = this.guild.channels.cache.find(
+          c => c.name === categoryData.name && c.type === ChannelType.GuildCategory
+        );
+
+        if (!category) {
+          category = await this.guild.channels.create({
+            name: categoryData.name,
+            type: ChannelType.GuildCategory,
+            permissionOverwrites: [
+              {
+                id: this.guild.id,
+                allow: [PermissionFlagsBits.ViewChannel],
+                deny: [PermissionFlagsBits.SendMessages, PermissionFlagsBits.Connect]
+              }
+            ]
+          });
+          this.createdCategories.push(categoryData.name);
+          console.log(`✅ Categoria criada: ${categoryData.name}`);
+        }
+
+        // Criar/atualizar canais
+        for (const channelData of categoryData.channels) {
+          const channel = await this.createChannel(channelData, category);
+
+          // Verificar e recriar painéis se necessário
+          if (channel) {
+            if (channelData.name === '📋╠registrar') {
+              const messages = await channel.messages.fetch({ limit: 10 });
+              const existePainel = messages.some(m =>
+                m.author.bot &&
+                m.embeds.length > 0 &&
+                m.embeds[0].title?.includes('Bem-vindo')
+              );
+              if (!existePainel) {
+                const RegistrationPanel = require('./registrationPanel');
+                await RegistrationPanel.sendPanel(channel);
+              }
+            }
+
+            if (channelData.name === '🔧╠configurações') {
+              const messages = await channel.messages.fetch({ limit: 10 });
+              const existePainel = messages.some(m =>
+                m.author.bot &&
+                m.embeds.length > 0 &&
+                m.embeds[0].title?.includes('CONFIGURAÇÕES')
+              );
+              if (!existePainel) {
+                const ConfigPanel = require('./configPanel');
+                await ConfigPanel.sendPanel(channel);
+              }
+            }
+          }
+        }
+
+      } catch (error) {
+        console.error(`❌ Erro: ${error.message}`);
+        this.errors.push(error.message);
+      }
+    }
+
+    return {
+      success: true,
+      message: `Atualização concluída!`,
       createdChannels: this.createdChannels,
       createdCategories: this.createdCategories,
       existingChannels: this.existingChannels,
@@ -206,10 +294,123 @@ class SetupManager {
         components: [button]
       });
 
-      console.log(`✅ Painel de registro enviado automaticamente em ${channel.name}`);
+      console.log(`✅ Painel de registro enviado em ${channel.name}`);
     } catch (error) {
       console.error('❌ Erro ao enviar painel de registro:', error);
       this.errors.push(`Painel registro: ${error.message}`);
+    }
+  }
+
+  // Método para enviar painel de configurações
+  async sendConfigPanel(channel) {
+    try {
+      // Inicializar configuração padrão se não existir
+      if (!global.guildConfig) global.guildConfig = new Map();
+      if (!global.guildConfig.has(this.guild.id)) {
+        global.guildConfig.set(this.guild.id, {
+          idioma: 'PT-BR',
+          taxaGuilda: 10,
+          guildaRegistrada: null,
+          xpAtivo: false,
+          taxaVendaBau: 10,
+          taxaEmprestimo: 5
+        });
+      }
+
+      const config = global.guildConfig.get(this.guild.id);
+
+      const embed = new EmbedBuilder()
+        .setTitle('⚙️ **PAINEL DE CONFIGURAÇÕES**')
+        .setDescription('Configure as opções do bot para este servidor.\n\n*Apenas membros com cargo **ADM** podem alterar estas configurações.*')
+        .setColor(0x3498DB)
+        .addFields(
+          {
+            name: '🌐 **Idioma**',
+            value: `\`${config.idioma}\`\n*(Fixo por enquanto)*`,
+            inline: true
+          },
+          {
+            name: '💰 **Taxa da Guilda**',
+            value: `\`${config.taxaGuilda}%\`\nTaxa em eventos`,
+            inline: true
+          },
+          {
+            name: '🏰 **Guilda Registrada**',
+            value: config.guildaRegistrada
+              ? `**${config.guildaRegistrada.nome}**\n🌍 ${config.guildaRegistrada.server}\n✅ Verificada`
+              : '❌ *Nenhuma guilda registrada*',
+            inline: false
+          },
+          {
+            name: '⭐ **Sistema XP**',
+            value: config.xpAtivo ? '✅ Ativado' : '🔴 Desativado',
+            inline: true
+          },
+          {
+            name: '📦 **Taxa Venda Baú**',
+            value: `\`${config.taxaVendaBau}%\`\n🔴 Inativo`,
+            inline: true
+          },
+          {
+            name: '💳 **Taxa Empréstimo**',
+            value: `\`${config.taxaEmprestimo}%\`\n🔴 Inativo`,
+            inline: true
+          }
+        )
+        .setFooter({ text: 'Clique nos botões abaixo para configurar' })
+        .setTimestamp();
+
+      const buttons = [
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId('config_idioma')
+            .setLabel('🌐 Idioma')
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(true),
+          new ButtonBuilder()
+            .setCustomId('config_taxa_guilda')
+            .setLabel('💰 Taxa Guilda')
+            .setStyle(ButtonStyle.Primary),
+          new ButtonBuilder()
+            .setCustomId('config_registrar_guilda')
+            .setLabel('🏰 Registrar Guilda')
+            .setStyle(ButtonStyle.Success)
+        ),
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId('config_xp')
+            .setLabel('⭐ Ativar XP')
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(true),
+          new ButtonBuilder()
+            .setCustomId('config_taxa_bau')
+            .setLabel('📦 Taxa Baú')
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(true),
+          new ButtonBuilder()
+            .setCustomId('config_taxa_emprestimo')
+            .setLabel('💳 Taxa Empréstimo')
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(true)
+        ),
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId('config_atualizar_bot')
+            .setLabel('🔄 Atualizar Bot')
+            .setStyle(ButtonStyle.Danger)
+            .setEmoji('🔄')
+        )
+      ];
+
+      await channel.send({
+        embeds: [embed],
+        components: buttons
+      });
+
+      console.log(`✅ Painel de configurações enviado em ${channel.name}`);
+    } catch (error) {
+      console.error('❌ Erro ao enviar painel de config:', error);
+      this.errors.push(`Painel config: ${error.message}`);
     }
   }
 
@@ -224,11 +425,13 @@ class SetupManager {
         return existingChannel;
       }
 
+      const permissions = this.getChannelPermissions(channelData.name);
+
       const channel = await this.guild.channels.create({
         name: channelData.name,
         type: channelData.type,
         parent: category.id,
-        permissionOverwrites: this.getChannelPermissions(channelData.name)
+        permissionOverwrites: permissions
       });
 
       this.createdChannels.push(channelData.name);
@@ -290,19 +493,43 @@ class SetupManager {
 
     // Permissões específicas por canal
 
-    // Canal de registro: Membros podem ver e escrever (para usar botões)
+    // Canal de registro: Todos podem ver e clicar no botão
     if (channelName.includes('registrar')) {
-      if (membroRole) {
-        permissions.push({
-          id: membroRole.id,
-          allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages]
-        });
-      }
-      // Remover deny SendMessages do everyone neste canal específico
+      // Remover restrições do everyone neste canal
       const everyonePerms = permissions.find(p => p.id === this.guild.id);
       if (everyonePerms) {
         everyonePerms.deny = everyonePerms.deny.filter(d => d !== PermissionFlagsBits.SendMessages);
         everyonePerms.allow.push(PermissionFlagsBits.SendMessages);
+      }
+    }
+
+    // Canal de configurações: Apenas ADM
+    if (channelName.includes('configurações')) {
+      // Bloquear everyone completamente (só visualização)
+      const everyonePerms = permissions.find(p => p.id === this.guild.id);
+      if (everyonePerms) {
+        everyonePerms.deny = [
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.Connect,
+          PermissionFlagsBits.AddReactions
+        ];
+        everyonePerms.allow = [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.ReadMessageHistory
+        ];
+      }
+
+      // Garantir que apenas ADM pode interagir
+      if (admRole) {
+        permissions.push({
+          id: admRole.id,
+          allow: [
+            PermissionFlagsBits.ViewChannel,
+            PermissionFlagsBits.SendMessages,
+            PermissionFlagsBits.ManageMessages,
+            PermissionFlagsBits.UseApplicationCommands
+          ]
+        });
       }
     }
 
@@ -326,9 +553,9 @@ class SetupManager {
 
     // Canais financeiros: Tesoureiro tem acesso especial
     if (channelName.includes('financeiro') ||
-        channelName.includes('depósitos') ||
-        channelName.includes('logs-banco') ||
-        channelName.includes('saldo-guilda')) {
+      channelName.includes('depósitos') ||
+      channelName.includes('logs-banco') ||
+      channelName.includes('saldo-guilda')) {
       if (tesoureiroRole) {
         permissions.push({
           id: tesoureiroRole.id,
@@ -386,7 +613,7 @@ class SetupManager {
   }
 
   getRolePermissions(roleName) {
-    switch(roleName) {
+    switch (roleName) {
       case 'ADM':
         return [PermissionFlagsBits.Administrator];
       case 'Staff':

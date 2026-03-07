@@ -37,7 +37,7 @@ class RegistrationModal {
     const armaInput = new TextInputBuilder()
       .setCustomId('reg_arma')
       .setLabel('⚔️ Arma Principal / Spec')
-      .setPlaceholder('Ex: Arco 700/700, Frost 600/700, Fire 800/800+...')
+      .setPlaceholder('Ex: Arco 700/700, Frost 600/700...')
       .setStyle(TextInputStyle.Paragraph)
       .setRequired(true)
       .setMaxLength(200);
@@ -144,7 +144,7 @@ class RegistrationModal {
 
   static async processServerSelect(interaction) {
     try {
-      await interaction.deferUpdate(); // Adicionar deferUpdate para evitar timeout
+      await interaction.deferUpdate();
 
       const server = interaction.values[0];
       const tempData = global.registroTemp?.get(interaction.user.id);
@@ -180,21 +180,12 @@ class RegistrationModal {
 
     } catch (error) {
       console.error('Erro em processServerSelect:', error);
-      // Tentar responder se ainda for possível
-      try {
-        if (!interaction.replied && !interaction.deferred) {
-          await interaction.reply({
-            content: '❌ Erro ao processar seleção. Tente novamente.',
-            ephemeral: true
-          });
-        }
-      } catch (e) {}
     }
   }
 
   static async processPlatformSelect(interaction, client) {
     try {
-      await interaction.deferUpdate(); // Adicionar deferUpdate para evitar timeout
+      await interaction.deferUpdate();
 
       const platform = interaction.values[0];
       const tempData = global.registroTemp?.get(interaction.user.id);
@@ -208,7 +199,7 @@ class RegistrationModal {
       }
 
       await interaction.editReply({
-        content: '⏳ Validando dados na API do Albion Online... Isso pode levar alguns segundos.',
+        content: '⏳ Consultando API do Albion Online...\nIsso pode levar alguns segundos...',
         components: [],
         embeds: []
       });
@@ -216,105 +207,85 @@ class RegistrationModal {
       tempData.platform = platform;
       const { nick, guilda, arma, server } = tempData;
 
+      let verification = { valid: false, error: null, details: null };
+      let apiError = false;
+
       try {
-        const verification = await AlbionAPI.verifyPlayerGuild(nick, guilda, server);
-
-        if (!verification.valid) {
-          const errorEmbed = new EmbedBuilder()
-            .setTitle('❌ Validação Falhou')
-            .setDescription(verification.error)
-            .addFields(
-              { name: '🎮 Nick Informado', value: nick, inline: true },
-              { name: '🏰 Guilda Informada', value: guilda, inline: true },
-              { name: '🌍 Servidor', value: server, inline: true }
-            )
-            .setColor(0xE74C3C)
-            .setFooter({ text: 'Verifique os dados e tente novamente' });
-
-          global.registroTemp.delete(interaction.user.id);
-
-          return await interaction.editReply({
-            content: null,
-            embeds: [errorEmbed],
-            components: [
-              new ActionRowBuilder().addComponents(
-                new ButtonBuilder()
-                  .setCustomId('btn_tentar_novamente_registro')
-                  .setLabel('🔄 Tentar Novamente')
-                  .setStyle(ButtonStyle.Primary)
-              )
-            ]
-          });
-        }
-
-        const registroId = `reg_${Date.now()}_${interaction.user.id}`;
-        const registroData = {
-          id: registroId,
-          userId: interaction.user.id,
-          userTag: interaction.user.tag,
-          nick: nick,
-          nickDoJogo: nick,
-          guilda: guilda,
-          server: server,
-          platform: platform,
-          arma: arma,
-          albionData: verification.details,
-          status: 'pendente',
-          timestamp: Date.now()
-        };
-
-        if (!global.registrosPendentes) global.registrosPendentes = new Map();
-        global.registrosPendentes.set(interaction.user.id, registroData);
-
-        global.registroTemp.delete(interaction.user.id);
-
-        await this.sendToApprovalChannel(interaction, registroData, client);
-
-        const successEmbed = new EmbedBuilder()
-          .setTitle('✅ Registro Enviado!')
-          .setDescription('Seu registro foi validado e enviado para análise da staff!')
-          .addFields(
-            { name: '🎮 Nick', value: nick, inline: true },
-            { name: '🏰 Guilda', value: guilda || 'Nenhuma', inline: true },
-            { name: '🌍 Servidor', value: server, inline: true },
-            { name: '💻 Plataforma', value: platform, inline: true },
-            { name: '⚔️ Arma/Spec', value: arma, inline: false }
-          )
-          .setColor(0x2ECC71)
-          .setFooter({ text: 'Você receberá uma DM quando for analisado' });
-
-        await interaction.editReply({
-          content: null,
-          embeds: [successEmbed],
-          components: []
-        });
-
-      } catch (error) {
-        console.error('Erro na validação:', error);
-        await interaction.editReply({
-          content: '❌ Erro ao validar dados na API do Albion. Tente novamente mais tarde.',
-          components: [
-            new ActionRowBuilder().addComponents(
-              new ButtonBuilder()
-                .setCustomId('btn_tentar_novamente_registro')
-                .setLabel('🔄 Tentar Novamente')
-                .setStyle(ButtonStyle.Primary)
-            )
-          ],
-          embeds: []
-        });
+        verification = await AlbionAPI.verifyPlayerGuild(nick, guilda, server);
+      } catch (apiErr) {
+        console.error('❌ Erro na API:', apiErr);
+        apiError = true;
+        verification.error = 'API indisponível ou timeout';
       }
+
+      // Se API falhou ou jogador não encontrado, ainda assim permite registro
+      // mas marca como "não verificado"
+      const apiVerified = verification.valid;
+
+      if (!apiVerified) {
+        console.log(`⚠️ API não validou jogador "${nick}": ${verification.error}`);
+        console.log(`📝 Permitindo registro mesmo assim (modo offline)`);
+      }
+
+      // Criar registro (com ou sem verificação da API)
+      const registroId = `reg_${Date.now()}_${interaction.user.id}`;
+      const registroData = {
+        id: registroId,
+        userId: interaction.user.id,
+        userTag: interaction.user.tag,
+        nick: nick,
+        nickDoJogo: nick,
+        guilda: guilda,
+        server: server,
+        platform: platform,
+        arma: arma,
+        albionData: verification.details || null,
+        apiVerified: apiVerified, // true se API validou, false se não
+        apiError: apiError || !apiVerified,
+        status: 'pendente',
+        timestamp: Date.now()
+      };
+
+      if (!global.registrosPendentes) global.registrosPendentes = new Map();
+      global.registrosPendentes.set(interaction.user.id, registroData);
+
+      global.registroTemp.delete(interaction.user.id);
+
+      await this.sendToApprovalChannel(interaction, registroData, client);
+
+      // Mensagem para o usuário
+      let mensagemSucesso;
+      if (apiVerified) {
+        mensagemSucesso = '✅ Registro validado pela API e enviado para análise!';
+      } else {
+        mensagemSucesso = '⚠️ Registro enviado para análise!\n\n_Note: Não foi possível verificar automaticamente na API do Albion. A staff irá analisar manualmente._';
+      }
+
+      const successEmbed = new EmbedBuilder()
+        .setTitle(apiVerified ? '✅ Registro Enviado!' : '⚠️ Registro Enviado (Verificação Manual)')
+        .setDescription(mensagemSucesso)
+        .addFields(
+          { name: '🎮 Nick', value: nick, inline: true },
+          { name: '🏰 Guilda', value: guilda || 'Nenhuma', inline: true },
+          { name: '🌍 Servidor', value: server, inline: true },
+          { name: '💻 Plataforma', value: platform, inline: true },
+          { name: '⚔️ Arma/Spec', value: arma, inline: false }
+        )
+        .setColor(apiVerified ? 0x2ECC71 : 0xF39C12)
+        .setFooter({ text: 'Você receberá uma DM quando for analisado' });
+
+      await interaction.editReply({
+        content: null,
+        embeds: [successEmbed],
+        components: []
+      });
 
     } catch (error) {
       console.error('Erro em processPlatformSelect:', error);
-      try {
-        if (!interaction.replied && !interaction.deferred) {
-          await interaction.reply({
-            content: '❌ Erro ao processar seleção. Tente novamente.',
-            ephemeral: true
-          });
-        }
-      } catch (e) {}
+      await interaction.editReply({
+        content: '❌ Erro ao processar registro. Tente novamente.',
+        components: []
+      });
     }
   }
 
@@ -338,23 +309,30 @@ class RegistrationModal {
       const embed = new EmbedBuilder()
         .setTitle('📝 Nova Solicitação de Registro')
         .setDescription(`Registro de ${interaction.user}`)
-        .setColor(0xF39C12)
+        .setColor(registroData.apiVerified ? 0x2ECC71 : 0xF39C12) // Verde se verificado, Amarelo se não
         .setThumbnail(interaction.user.displayAvatarURL({ dynamic: true }))
         .addFields(
           { name: '👤 Usuário Discord', value: `${interaction.user} (\`${interaction.user.id}\`)`, inline: false },
           { name: '🎮 Nick no Albion', value: `\`${registroData.nick}\``, inline: true },
-          { name: '🏰 Guilda Atual', value: registroData.guilda || 'Nenhuma', inline: true },
+          { name: '🏰 Guilda Informada', value: registroData.guilda || 'Nenhuma', inline: true },
           { name: '🌍 Servidor', value: `${serverEmoji[registroData.server]} ${registroData.server.toUpperCase()}`, inline: true },
           { name: '💻 Plataforma', value: registroData.platform, inline: true },
           { name: '⚔️ Arma/Spec', value: registroData.arma, inline: false }
         )
-        .setFooter({ text: `ID do Registro: ${registroData.id}` })
+        .setFooter({ text: `ID: ${registroData.id} | ${registroData.apiVerified ? '✅ Verificado via API' : '⚠️ NÃO verificado na API'}` })
         .setTimestamp();
 
-      if (registroData.albionData) {
+      // Se tiver dados da API, adicionar info
+      if (registroData.albionData && registroData.apiVerified) {
         embed.addFields({
           name: '✅ Validação API',
-          value: `Jogador verificado na API do Albion\nGuilda atual: ${registroData.albionData.guildName || 'Sem guilda'}`,
+          value: `Jogador encontrado!\nGuilda atual: ${registroData.albionData.guildName || 'Sem guilda'}`,
+          inline: false
+        });
+      } else if (!registroData.apiVerified) {
+        embed.addFields({
+          name: '⚠️ ATENÇÃO',
+          value: 'Este nick não foi encontrado na API do Albion Online.\nVerifique manualmente se o jogador existe antes de aprovar!',
           inline: false
         });
       }

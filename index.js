@@ -1,17 +1,18 @@
-const { 
-  Client, 
-  GatewayIntentBits, 
-  Collection, 
-  REST, 
-  Routes, 
+const {
+  Client,
+  GatewayIntentBits,
+  Collection,
+  REST,
+  Routes,
   Events,
-  PermissionFlagsBits 
+  PermissionFlagsBits
 } = require('discord.js');
 require('dotenv').config();
 
-// Importar Handlers do Sistema de Registro
+// Importar Handlers
 const RegistrationModal = require('./handlers/registrationModal');
 const RegistrationActions = require('./handlers/registrationActions');
+const ConfigActions = require('./handlers/configActions');
 
 // Criar cliente
 const client = new Client({
@@ -23,7 +24,7 @@ const client = new Client({
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.DirectMessages
   ],
-  partials: ['CHANNEL'] // Necessário para receber DMs
+  partials: ['CHANNEL']
 });
 
 // Coleção de comandos
@@ -32,16 +33,15 @@ client.commands = new Collection();
 // Importar Comandos
 const instalarCommand = require('./commands/instalar');
 const desistalarCommand = require('./commands/desistalar');
-const painelRegistroCommand = require('./commands/painel-registro');
 
 // Registrar comandos na coleção
 client.commands.set(instalarCommand.data.name, instalarCommand);
 client.commands.set(desistalarCommand.data.name, desistalarCommand);
-client.commands.set(painelRegistroCommand.data.name, painelRegistroCommand);
 
 // Inicializar variáveis globais
 global.registrosPendentes = new Map();
 global.registroTemp = new Map();
+global.guildConfig = new Map();
 
 // Evento Ready
 client.once(Events.ClientReady, async () => {
@@ -52,8 +52,7 @@ client.once(Events.ClientReady, async () => {
   // Registrar Slash Commands
   const commands = [
     instalarCommand.data.toJSON(),
-    desistalarCommand.data.toJSON(),
-    painelRegistroCommand.data.toJSON()
+    desistalarCommand.data.toJSON()
   ];
 
   const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
@@ -87,8 +86,8 @@ client.on(Events.InteractionCreate, async interaction => {
 
       // Verificar permissões específicas
       if (command.data.name === 'instalar' || command.data.name === 'desistalar') {
-        const isADM = interaction.member.roles.cache.some(r => r.name === 'ADM') || 
-                      interaction.member.permissions.has(PermissionFlagsBits.Administrator);
+        const isADM = interaction.member.roles.cache.some(r => r.name === 'ADM') ||
+          interaction.member.permissions.has(PermissionFlagsBits.Administrator);
 
         if (!isADM) {
           return interaction.reply({
@@ -136,21 +135,19 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // Aprovar como Membro
+      // Aprovações de Registro
       if (customId.startsWith('aprovar_membro_')) {
         const regId = customId.replace('aprovar_membro_', '');
         await RegistrationActions.approveAsMember(interaction, regId);
         return;
       }
 
-      // Aprovar como Aliança
       if (customId.startsWith('aprovar_alianca_')) {
         const regId = customId.replace('aprovar_alianca_', '');
         await RegistrationActions.approveAsAlianca(interaction, regId);
         return;
       }
 
-      // Aprovar como Convidado
       if (customId.startsWith('aprovar_convidado_')) {
         const regId = customId.replace('aprovar_convidado_', '');
         await RegistrationActions.approveAsConvidado(interaction, regId);
@@ -163,28 +160,70 @@ client.on(Events.InteractionCreate, async interaction => {
         await RegistrationActions.rejectRegistration(interaction, regId);
         return;
       }
+
+      // Configurações do Bot
+      if (customId === 'config_taxa_guilda') {
+        await ConfigActions.handleTaxaGuilda(interaction);
+        return;
+      }
+
+      if (customId === 'config_registrar_guilda') {
+        await ConfigActions.handleRegistrarGuilda(interaction);
+        return;
+      }
+
+      if (customId === 'config_xp') {
+        await ConfigActions.handleXP(interaction);
+        return;
+      }
+
+      if (customId === 'config_taxa_bau') {
+        await ConfigActions.handleTaxaBau(interaction);
+        return;
+      }
+
+      if (customId === 'config_taxa_emprestimo') {
+        await ConfigActions.handleTaxaEmprestimo(interaction);
+        return;
+      }
+
+      if (customId === 'config_atualizar_bot') {
+        await ConfigActions.handleAtualizarBot(interaction);
+        return;
+      }
     }
 
     // ==================== SELECT MENUS ====================
     if (interaction.isStringSelectMenu()) {
-      // Sistema de Registro - Seleção de Servidor
+      // Sistema de Registro
       if (interaction.customId === 'select_server_registro') {
         await RegistrationModal.processServerSelect(interaction);
         return;
       }
 
-      // Sistema de Registro - Seleção de Plataforma
       if (interaction.customId === 'select_platform_registro') {
         await RegistrationModal.processPlatformSelect(interaction, client);
+        return;
+      }
+
+      // Configurações - Taxa Guilda
+      if (interaction.customId === 'select_taxa_guilda') {
+        await ConfigActions.handleTaxaSelect(interaction);
         return;
       }
     }
 
     // ==================== MODALS ====================
     if (interaction.isModalSubmit()) {
-      // Sistema de Registro - Processar Modal
+      // Sistema de Registro
       if (interaction.customId === 'modal_registro') {
         await RegistrationModal.processRegistration(interaction, client);
+        return;
+      }
+
+      // Configurações - Registrar Guilda
+      if (interaction.customId === 'modal_registrar_guilda') {
+        await ConfigActions.processGuildRegistration(interaction);
         return;
       }
     }
@@ -192,7 +231,6 @@ client.on(Events.InteractionCreate, async interaction => {
   } catch (error) {
     console.error('❌ Erro no handler de interações:', error);
 
-    // Tentar responder ao usuário se possível
     try {
       if (interaction.isRepliable() && !interaction.replied) {
         await interaction.reply({
