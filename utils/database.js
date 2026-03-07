@@ -1,10 +1,11 @@
-const Database = require('better-sqlite3');
+const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const fs = require('fs');
+const { promisify } = require('util');
 
 /**
- * Database Manager com SQLite (better-sqlite3)
- * Substitui JSON por SQL com transações ACID
+ * Database Manager - Versão SQLite3 para Replit
+ * API idêntica à versão better-sqlite3 para compatibilidade
  */
 
 class DatabaseManager {
@@ -12,9 +13,10 @@ class DatabaseManager {
     this.dbPath = path.join(__dirname, '..', 'data', 'database.db');
     this.db = null;
     this.initialized = false;
+    this.statements = {}; // Cache de prepared statements
   }
 
-  initialize() {
+  async initialize() {
     try {
       // Garante diretório
       const dir = path.dirname(this.dbPath);
@@ -22,16 +24,21 @@ class DatabaseManager {
         fs.mkdirSync(dir, { recursive: true });
       }
 
-      this.db = new Database(this.dbPath);
-      this.db.pragma('journal_mode = WAL'); // Write-Ahead Logging para melhor performance
+      // Abre conexão (async)
+      this.db = new sqlite3.Database(this.dbPath);
 
-      this.createTables();
-      this.migrateFromJSON(); // Migra dados antigos se existirem
+      // Promisify methods
+      this.db.runAsync = promisify(this.db.run.bind(this.db));
+      this.db.getAsync = promisify(this.db.get.bind(this.db));
+      this.db.allAsync = promisify(this.db.all.bind(this.db));
+
+      await this.createTables();
+      await this.migrateFromJSON();
 
       this.initialized = true;
-      console.log('[Database] SQLite initialized successfully');
+      console.log('[Database] SQLite3 initialized successfully (Replit Mode)');
 
-      // Inicia cleanup automático a cada 24h
+      // Cleanup automático a cada 24h
       setInterval(() => this.cleanup(), 24 * 60 * 60 * 1000);
 
     } catch (error) {
@@ -40,9 +47,9 @@ class DatabaseManager {
     }
   }
 
-  createTables() {
+  async createTables() {
     // Usuários (sistema financeiro + XP)
-    this.db.exec(`
+    await this.db.runAsync(`
       CREATE TABLE IF NOT EXISTS users (
         user_id TEXT PRIMARY KEY,
         saldo INTEGER DEFAULT 0,
@@ -64,7 +71,7 @@ class DatabaseManager {
     `);
 
     // Transações (auditoria completa)
-    this.db.exec(`
+    await this.db.runAsync(`
       CREATE TABLE IF NOT EXISTS transactions (
         id TEXT PRIMARY KEY,
         type TEXT NOT NULL,
@@ -75,13 +82,12 @@ class DatabaseManager {
         event_id TEXT,
         approved_by TEXT,
         approved_at INTEGER,
-        created_at INTEGER DEFAULT (strftime('%s', 'now') * 1000),
-        FOREIGN KEY (user_id) REFERENCES users(user_id)
+        created_at INTEGER DEFAULT (strftime('%s', 'now') * 1000)
       )
     `);
 
     // Eventos (histórico)
-    this.db.exec(`
+    await this.db.runAsync(`
       CREATE TABLE IF NOT EXISTS events (
         event_id TEXT PRIMARY KEY,
         guild_id TEXT NOT NULL,
@@ -100,7 +106,7 @@ class DatabaseManager {
     `);
 
     // Blacklist
-    this.db.exec(`
+    await this.db.runAsync(`
       CREATE TABLE IF NOT EXISTS blacklist (
         user_id TEXT PRIMARY KEY,
         nick TEXT,
@@ -111,8 +117,8 @@ class DatabaseManager {
       )
     `);
 
-    // Auditoria (log de todas as ações importantes)
-    this.db.exec(`
+    // Auditoria
+    await this.db.runAsync(`
       CREATE TABLE IF NOT EXISTS audit_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         action_type TEXT NOT NULL,
@@ -120,13 +126,12 @@ class DatabaseManager {
         target_id TEXT,
         guild_id TEXT,
         details TEXT,
-        ip_hash TEXT, -- Para segurança, hash do IP se disponível
         created_at INTEGER DEFAULT (strftime('%s', 'now') * 1000)
       )
     `);
 
     // Templates de eventos
-    this.db.exec(`
+    await this.db.runAsync(`
       CREATE TABLE IF NOT EXISTS event_templates (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         guild_id TEXT NOT NULL,
@@ -135,21 +140,21 @@ class DatabaseManager {
         description TEXT,
         requirements TEXT,
         default_duration INTEGER,
-        recurrence_rule TEXT, -- JSON com regras de recorrência
+        recurrence_rule TEXT,
         created_at INTEGER DEFAULT (strftime('%s', 'now') * 1000)
       )
     `);
 
     // Votações
-    this.db.exec(`
+    await this.db.runAsync(`
       CREATE TABLE IF NOT EXISTS votes (
         vote_id TEXT PRIMARY KEY,
         guild_id TEXT NOT NULL,
         creator_id TEXT NOT NULL,
         title TEXT NOT NULL,
         description TEXT,
-        options TEXT NOT NULL, -- JSON
-        votes TEXT DEFAULT '{}', -- JSON {userId: optionIndex}
+        options TEXT NOT NULL,
+        votes TEXT DEFAULT '{}',
         ends_at INTEGER NOT NULL,
         status TEXT DEFAULT 'active',
         created_at INTEGER DEFAULT (strftime('%s', 'now') * 1000)
@@ -157,12 +162,12 @@ class DatabaseManager {
     `);
 
     // Presença diária
-    this.db.exec(`
+    await this.db.runAsync(`
       CREATE TABLE IF NOT EXISTS daily_checkins (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT NOT NULL,
         guild_id TEXT NOT NULL,
-        date TEXT NOT NULL, -- YYYY-MM-DD
+        date TEXT NOT NULL,
         reward_xp INTEGER,
         reward_saldo INTEGER,
         streak INTEGER,
@@ -170,36 +175,30 @@ class DatabaseManager {
       )
     `);
 
-    // Índices para performance
-    this.db.exec(`
-      CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(user_id);
-      CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(created_at);
-      CREATE INDEX IF NOT EXISTS idx_events_guild ON events(guild_id);
-      CREATE INDEX IF NOT EXISTS idx_events_status ON events(status);
-      CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_logs(user_id);
-      CREATE INDEX IF NOT EXISTS idx_audit_date ON audit_logs(created_at);
-    `);
+    // Índices
+    await this.db.runAsync(`CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(user_id)`);
+    await this.db.runAsync(`CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(created_at)`);
+    await this.db.runAsync(`CREATE INDEX IF NOT EXISTS idx_events_guild ON events(guild_id)`);
+    await this.db.runAsync(`CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_logs(user_id)`);
   }
 
   // ==================== USERS ====================
 
-  getUser(userId) {
-    const stmt = this.db.prepare('SELECT * FROM users WHERE user_id = ?');
-    let user = stmt.get(userId);
+  async getUser(userId) {
+    const row = await this.db.getAsync('SELECT * FROM users WHERE user_id = ?', [userId]);
 
-    if (!user) {
-      const insert = this.db.prepare(`
-        INSERT INTO users (user_id, ultimo_login) 
-        VALUES (?, ?)
-      `);
-      insert.run(userId, Date.now());
-      user = stmt.get(userId);
+    if (!row) {
+      await this.db.runAsync(
+        'INSERT INTO users (user_id, ultimo_login) VALUES (?, ?)',
+        [userId, Date.now()]
+      );
+      return this.getUser(userId);
     }
 
-    return this.parseUser(user);
+    return this.parseUser(row);
   }
 
-  updateUser(userId, data) {
+  async updateUser(userId, data) {
     const fields = [];
     const values = [];
 
@@ -209,15 +208,10 @@ class DatabaseManager {
       values.push(value);
     });
 
-    values.push(userId);
+    values.push(Date.now(), userId); // updated_at e user_id
 
-    const stmt = this.db.prepare(`
-      UPDATE users 
-      SET ${fields.join(', ')}, updated_at = ? 
-      WHERE user_id = ?
-    `);
-
-    stmt.run(...values, Date.now(), userId);
+    const sql = `UPDATE users SET ${fields.join(', ')}, updated_at = ? WHERE user_id = ?`;
+    await this.db.runAsync(sql, values);
   }
 
   parseUser(row) {
@@ -241,15 +235,15 @@ class DatabaseManager {
 
   // ==================== TRANSACTIONS ====================
 
-  addTransaction(transaction) {
-    const stmt = this.db.prepare(`
+  async addTransaction(transaction) {
+    const id = transaction.id || `txn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+    await this.db.runAsync(`
       INSERT INTO transactions 
       (id, type, user_id, amount, reason, guild_id, event_id, approved_by, approved_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    stmt.run(
-      transaction.id || `txn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    `, [
+      id,
       transaction.type,
       transaction.userId,
       transaction.amount,
@@ -258,47 +252,43 @@ class DatabaseManager {
       transaction.eventId || '',
       transaction.approvedBy || null,
       transaction.approvedAt || null
-    );
+    ]);
   }
 
-  getUserTransactions(userId, limit = 50) {
-    const stmt = this.db.prepare(`
+  async getUserTransactions(userId, limit = 50) {
+    return await this.db.allAsync(`
       SELECT * FROM transactions 
       WHERE user_id = ? 
       ORDER BY created_at DESC 
       LIMIT ?
-    `);
-    return stmt.all(userId, limit);
+    `, [userId, limit]);
   }
 
-  getGuildBalance(guildId) {
-    const stmt = this.db.prepare(`
+  async getGuildBalance(guildId) {
+    const result = await this.db.getAsync(`
       SELECT SUM(amount) as total 
       FROM transactions 
       WHERE guild_id = ? AND reason = 'taxa_guilda'
-    `);
-    const result = stmt.get(guildId);
+    `, [guildId]);
     return result?.total || 0;
   }
 
   // ==================== AUDIT ====================
 
-  logAudit(actionType, userId, details = {}, guildId = null, targetId = null) {
-    const stmt = this.db.prepare(`
+  async logAudit(actionType, userId, details = {}, guildId = null, targetId = null) {
+    await this.db.runAsync(`
       INSERT INTO audit_logs (action_type, user_id, target_id, guild_id, details)
       VALUES (?, ?, ?, ?, ?)
-    `);
-
-    stmt.run(
+    `, [
       actionType,
       userId,
       targetId,
       guildId,
       JSON.stringify(details)
-    );
+    ]);
   }
 
-  getAuditLogs(filters = {}, limit = 100) {
+  async getAuditLogs(filters = {}, limit = 100) {
     let query = 'SELECT * FROM audit_logs WHERE 1=1';
     const params = [];
 
@@ -314,16 +304,12 @@ class DatabaseManager {
       query += ' AND action_type = ?';
       params.push(filters.actionType);
     }
-    if (filters.since) {
-      query += ' AND created_at > ?';
-      params.push(filters.since);
-    }
 
     query += ' ORDER BY created_at DESC LIMIT ?';
     params.push(limit);
 
-    const stmt = this.db.prepare(query);
-    return stmt.all(...params).map(row => ({
+    const rows = await this.db.allAsync(query, params);
+    return rows.map(row => ({
       ...row,
       details: JSON.parse(row.details || '{}')
     }));
@@ -331,14 +317,12 @@ class DatabaseManager {
 
   // ==================== EVENTS ====================
 
-  saveEvent(eventData) {
-    const stmt = this.db.prepare(`
+  async saveEvent(eventData) {
+    await this.db.runAsync(`
       INSERT OR REPLACE INTO events 
       (event_id, guild_id, creator_id, nome, descricao, tipo, status, valor_total, taxa_guilda, participantes, started_at, ended_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    stmt.run(
+    `, [
       eventData.id,
       eventData.guildId,
       eventData.criadorId,
@@ -351,37 +335,33 @@ class DatabaseManager {
       JSON.stringify(Array.from(eventData.participantes?.entries() || [])),
       eventData.inicioTimestamp,
       eventData.finalizadoEm
-    );
+    ]);
   }
 
-  getEventHistory(guildId, limit = 50) {
-    const stmt = this.db.prepare(`
+  async getEventHistory(guildId, limit = 50) {
+    return await this.db.allAsync(`
       SELECT * FROM events 
       WHERE guild_id = ? 
       ORDER BY created_at DESC 
       LIMIT ?
-    `);
-    return stmt.all(guildId, limit);
+    `, [guildId, limit]);
   }
 
   // ==================== DAILY CHECKINS ====================
 
-  recordCheckin(userId, guildId, rewards) {
+  async recordCheckin(userId, guildId, rewards) {
     const today = new Date().toISOString().split('T')[0];
 
-    const stmt = this.db.prepare(`
+    await this.db.runAsync(`
       INSERT INTO daily_checkins (user_id, guild_id, date, reward_xp, reward_saldo, streak)
       VALUES (?, ?, ?, ?, ?, ?)
       ON CONFLICT(user_id, date) DO UPDATE SET
       reward_xp = excluded.reward_xp,
       reward_saldo = excluded.reward_saldo
-    `);
-
-    stmt.run(userId, guildId, today, rewards.xp, rewards.saldo, rewards.streak);
+    `, [userId, guildId, today, rewards.xp, rewards.saldo, rewards.streak]);
 
     // Atualiza streak no usuário
-    const user = this.getUser(userId);
-    this.updateUser(userId, {
+    await this.updateUser(userId, {
       streak_diaria: rewards.streak,
       ultimo_checkin: Date.now()
     });
@@ -389,24 +369,21 @@ class DatabaseManager {
     return rewards;
   }
 
-  getTodayCheckin(userId) {
+  async getTodayCheckin(userId) {
     const today = new Date().toISOString().split('T')[0];
-    const stmt = this.db.prepare(`
+    return await this.db.getAsync(`
       SELECT * FROM daily_checkins 
       WHERE user_id = ? AND date = ?
-    `);
-    return stmt.get(userId, today);
+    `, [userId, today]);
   }
 
   // ==================== TEMPLATES ====================
 
-  saveTemplate(guildId, creatorId, template) {
-    const stmt = this.db.prepare(`
+  async saveTemplate(guildId, creatorId, template) {
+    const result = await this.db.runAsync(`
       INSERT INTO event_templates (guild_id, creator_id, name, description, requirements, default_duration, recurrence_rule)
       VALUES (?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    return stmt.run(
+    `, [
       guildId,
       creatorId,
       template.name,
@@ -414,16 +391,19 @@ class DatabaseManager {
       template.requirements,
       template.duration,
       JSON.stringify(template.recurrence || {})
-    );
+    ]);
+
+    return result.lastID;
   }
 
-  getTemplates(guildId) {
-    const stmt = this.db.prepare(`
+  async getTemplates(guildId) {
+    const rows = await this.db.allAsync(`
       SELECT * FROM event_templates 
       WHERE guild_id = ? 
       ORDER BY created_at DESC
-    `);
-    return stmt.all(guildId).map(t => ({
+    `, [guildId]);
+
+    return rows.map(t => ({
       ...t,
       recurrenceRule: JSON.parse(t.recurrence_rule || '{}')
     }));
@@ -431,13 +411,11 @@ class DatabaseManager {
 
   // ==================== VOTES ====================
 
-  createVote(voteData) {
-    const stmt = this.db.prepare(`
+  async createVote(voteData) {
+    await this.db.runAsync(`
       INSERT INTO votes (vote_id, guild_id, creator_id, title, description, options, ends_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    stmt.run(
+    `, [
       voteData.id,
       voteData.guildId,
       voteData.creatorId,
@@ -445,12 +423,11 @@ class DatabaseManager {
       voteData.description,
       JSON.stringify(voteData.options),
       voteData.endsAt
-    );
+    ]);
   }
 
-  getVote(voteId) {
-    const stmt = this.db.prepare('SELECT * FROM votes WHERE vote_id = ?');
-    const row = stmt.get(voteId);
+  async getVote(voteId) {
+    const row = await this.db.getAsync('SELECT * FROM votes WHERE vote_id = ?', [voteId]);
     if (row) {
       row.options = JSON.parse(row.options);
       row.votes = JSON.parse(row.votes);
@@ -458,39 +435,32 @@ class DatabaseManager {
     return row;
   }
 
-  castVote(voteId, userId, optionIndex) {
-    const vote = this.getVote(voteId);
+  async castVote(voteId, userId, optionIndex) {
+    const vote = await this.getVote(voteId);
     if (!vote || vote.status !== 'active') return false;
     if (Date.now() > vote.ends_at) return false;
 
     const votes = JSON.parse(vote.votes);
-    if (votes[userId] !== undefined) return false; // Já votou
+    if (votes[userId] !== undefined) return false;
 
     votes[userId] = optionIndex;
 
-    const stmt = this.db.prepare('UPDATE votes SET votes = ? WHERE vote_id = ?');
-    stmt.run(JSON.stringify(votes), voteId);
+    await this.db.runAsync('UPDATE votes SET votes = ? WHERE vote_id = ?', 
+      [JSON.stringify(votes), voteId]);
     return true;
   }
 
   // ==================== CLEANUP & MIGRATION ====================
 
-  cleanup() {
+  async cleanup() {
     console.log('[Database] Running cleanup...');
-
-    // Remove eventos finalizados antigos (> 90 dias)
     const ninetyDaysAgo = Date.now() - (90 * 24 * 60 * 60 * 1000);
-    this.db.prepare('DELETE FROM events WHERE ended_at < ?').run(ninetyDaysAgo);
-
-    // Compacta database
-    this.db.exec('VACUUM');
+    await this.db.runAsync('DELETE FROM events WHERE ended_at < ?', [ninetyDaysAgo]);
   }
 
-  migrateFromJSON() {
-    // Migra dados antigos de JSON para SQLite se existirem
+  async migrateFromJSON() {
     const fs = require('fs');
     const path = require('path');
-
     const dataDir = path.join(__dirname, '..', 'data');
 
     // Migra blacklist
@@ -498,13 +468,12 @@ class DatabaseManager {
     if (fs.existsSync(blacklistPath)) {
       try {
         const data = JSON.parse(fs.readFileSync(blacklistPath, 'utf8'));
-        const stmt = this.db.prepare(`
-          INSERT OR IGNORE INTO blacklist (user_id, nick, guilda, motivo, added_by)
-          VALUES (?, ?, ?, ?, ?)
-        `);
 
-        for (const [userId, entry] of data) {
-          stmt.run(userId, entry.nick, entry.guilda, entry.motivo || '', entry.adicionadoPor || '');
+        for (const [userId, entry] of Object.entries(data)) {
+          await this.db.runAsync(`
+            INSERT OR IGNORE INTO blacklist (user_id, nick, guilda, motivo, added_by)
+            VALUES (?, ?, ?, ?, ?)
+          `, [userId, entry.nick, entry.guilda, entry.motivo || '', entry.adicionadoPor || '']);
         }
         console.log('[Database] Migrated blacklist from JSON');
       } catch (e) {
@@ -521,5 +490,5 @@ class DatabaseManager {
   }
 }
 
-// Singleton instance
+// Singleton
 module.exports = new DatabaseManager();

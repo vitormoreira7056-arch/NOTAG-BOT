@@ -98,7 +98,7 @@ global.pendingBauSales = new Map();
 global.activeXpEvents = new Map();
 global.pendingOrbDeposits = new Map();
 global.client = client;
-global.recurrenceHandler = null; // Será inicializado depois
+global.recurrenceHandler = null;
 
 // Rate limiting maps
 const rateLimits = new Map();
@@ -109,13 +109,18 @@ client.once(Events.ClientReady, async () => {
   console.log(`🤖 ID do Bot: ${client.user.id}`);
   console.log(`📅 Data de início: ${new Date().toLocaleString()}`);
 
-  // Inicializar sistemas
-  Database.initialize();
-  RegistrationActions.initialize();
-  EventHandler.initialize();
-  global.recurrenceHandler = new RecurrenceHandler(); // Carrega recorrências
+  // Inicializar sistemas (AGORA COM AWAIT)
+  try {
+    await Database.initialize();
+    RegistrationActions.initialize();
+    EventHandler.initialize();
+    global.recurrenceHandler = new RecurrenceHandler();
 
-  console.log('📝 Sistemas inicializados');
+    console.log('📝 Sistemas inicializados com sucesso');
+  } catch (error) {
+    console.error('❌ Erro ao inicializar sistemas:', error);
+    process.exit(1);
+  }
 
   // Registrar Slash Commands
   const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
@@ -265,7 +270,6 @@ async function handleButton(interaction, customId) {
 
     // Sistema de Eventos
     if (customId === 'btn_criar_evento') {
-      // Verifica se quer usar template ou criar do zero
       await TemplateHandler.showTemplateSelector(interaction, 'use');
       return;
     }
@@ -615,15 +619,11 @@ async function handleSelectMenu(interaction) {
       const [action, templateId] = interaction.values[0].split('_');
       if (action === 'use') {
         await TemplateHandler.loadTemplateForEvent(interaction, templateId);
-      } else if (action === 'edit') {
-        // Implementar edição
-        await interaction.reply({ content: '🔧 Edição de template em desenvolvimento.', ephemeral: true });
       }
       return;
     }
 
     if (interaction.customId === 'select_orb_users') {
-      const users = interaction.values;
       await OrbHandler.showOrbTypeSelect(interaction);
       return;
     }
@@ -812,19 +812,18 @@ process.on('unhandledRejection', error => {
 
 process.on('uncaughtException', error => {
   console.error('❌ Uncaught exception:', error);
-  // Salva dados críticos antes de morrer
   Database.close();
   process.exit(1);
 });
 
-// Graceful shutdown
-process.on('SIGINT', async () => {
+// Graceful shutdown (SYNC para sqlite3)
+process.on('SIGINT', () => {
   console.log('\n💾 Salvando dados...');
   Database.close();
   process.exit();
 });
 
-process.on('SIGTERM', async () => {
+process.on('SIGTERM', () => {
   console.log('\n💾 Encerrando graciosamente...');
   Database.close();
   process.exit();
