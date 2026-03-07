@@ -1,204 +1,242 @@
-const {
- EmbedBuilder,
- ActionRowBuilder,
- ButtonBuilder,
- ButtonStyle
-} = require('discord.js');
+const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, PermissionFlagsBits } = require('discord.js');
 const Database = require('../utils/database');
 
+/**
+ * Handler do Painel de Saldo da Guilda
+ * Mostra saldo total e estatísticas financeiras
+ */
+
 class BalancePanelHandler {
- constructor() {
- this.updateIntervals = new Map();
- }
+  /**
+   * Cria e envia o painel de saldo
+   * @param {TextChannel} channel - Canal onde enviar
+   * @param {Guild} guild - Objeto da guilda
+   */
+  static async createAndSendPanel(channel, guild) {
+    try {
+      // Verificações de segurança
+      if (!channel || !guild) {
+        console.error('[BalancePanel] Channel or guild is undefined');
+        return;
+      }
 
- static async createAndSendPanel(channel) {
- try {
- console.log(`[BalancePanel] Creating panel in channel ${channel.id}`);
+      // Verifica se é um canal de texto
+      if (!channel.isTextBased()) {
+        console.error('[BalancePanel] Channel is not text-based');
+        return;
+      }
 
- const embed = await this.generateEmbed(channel.guild);
+      // Obtém o membro do bot na guilda
+      let botMember;
+      try {
+        botMember = await guild.members.fetch(channel.client.user.id);
+      } catch (e) {
+        botMember = guild.members.me;
+      }
 
- const row = new ActionRowBuilder()
- .addComponents(
- new ButtonBuilder()
- .setCustomId('btn_atualizar_saldo_guilda')
- .setLabel('🔄 Atualizar Agora')
- .setStyle(ButtonStyle.Primary)
- );
+      if (!botMember) {
+        console.error('[BalancePanel] Bot member not found in guild');
+        return;
+      }
 
- const message = await channel.send({
- embeds: [embed],
- components: [row]
- });
+      // Verifica permissões no canal
+      let permissions;
+      try {
+        permissions = channel.permissionsFor(botMember);
+      } catch (e) {
+        console.error('[BalancePanel] Error getting permissions:', e.message);
+        return;
+      }
 
- // Iniciar atualização automática a cada 2 minutos
- this.startAutoUpdate(channel.guild, message);
+      if (!permissions) {
+        console.error('[BalancePanel] Could not get permissions for channel');
+        return;
+      }
 
- console.log(`[BalancePanel] Panel created with auto-update`);
- return message;
+      // Verifica permissões necessárias
+      const requiredPermissions = [
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.EmbedLinks
+      ];
 
- } catch (error) {
- console.error(`[BalancePanel] Error creating panel:`, error);
- throw error;
- }
- }
+      for (const perm of requiredPermissions) {
+        if (!permissions.has(perm)) {
+          console.error(`[BalancePanel] Missing permission: ${perm}`);
+          return;
+        }
+      }
 
- static async generateEmbed(guild) {
- try {
- // Calcular estatísticas
- let saldoTotal = 0;
- let valorArrecadado = 0;
- let emprestimosTotais = 0;
- let saldoGuilda = 0;
+      const embed = await this.createPanelEmbed(guild);
 
- // Percorrer todos os usuários do banco de dados
- const users = Database.getAllUsers ? Database.getAllUsers() : [];
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('btn_atualizar_saldo_guilda')
+          .setLabel('🔄 Atualizar')
+          .setStyle(ButtonStyle.Primary)
+      );
 
- users.forEach(user => {
- if (user.userId === 'GUILD_BANK') {
- saldoGuilda = user.saldo || 0;
- } else {
- saldoTotal += user.saldo || 0;
- emprestimosTotais += user.emprestimosPendentes || 0;
- }
- });
+      const message = await channel.send({
+        embeds: [embed],
+        components: [row]
+      });
 
- // Calcular valor arrecadado em % (taxas de eventos)
- const transactions = Database.transactions || [];
- transactions.forEach(t => {
- if (t.reason === 'taxa_guilda' && t.guildId === guild.id) {
- valorArrecadado += t.amount;
- }
- });
+      // Inicia auto-update apenas se conseguiu enviar
+      if (message) {
+        this.startAutoUpdate(message, guild);
+      }
 
- saldoTotal += saldoGuilda;
- const saldoLiquido = saldoTotal - emprestimosTotais;
+    } catch (error) {
+      console.error('[BalancePanel] Error creating panel:', error);
+    }
+  }
 
- const embed = new EmbedBuilder()
- .setTitle('🏦 SALDO DA GUILDA')
- .setDescription('Informações financeiras atualizadas em tempo real')
- .setColor(0x2ECC71)
- .addFields(
- {
- name: '💰 Saldo Total',
- value: `\`${saldoTotal.toLocaleString()}\``,
- inline: true
- },
- {
- name: '📊 Valor Arrecadado (Taxas)',
- value: `\`${valorArrecadado.toLocaleString()}\``,
- inline: true
- },
- {
- name: '💳 Empréstimos Pendentes',
- value: `\`${emprestimosTotais.toLocaleString()}\``,
- inline: true
- },
- {
- name: '💵 Saldo Líquido',
- value: `\`${saldoLiquido.toLocaleString()}\``,
- inline: false
- }
- )
- .setFooter({ text: `Atualizado: ${new Date().toLocaleString()} • Atualiza a cada 2 minutos` })
- .setTimestamp();
+  /**
+   * Cria o embed do painel
+   * @param {Guild} guild - Objeto da guilda
+   */
+  static async createPanelEmbed(guild) {
+    try {
+      const totalBalance = await Database.getGuildBalance(guild.id);
 
- return embed;
+      // Busca estatísticas adicionais com try-catch individual
+      let totalTransactions = 0;
+      let totalMembers = 0;
 
- } catch (error) {
- console.error(`[BalancePanel] Error generating embed:`, error);
+      try {
+        totalTransactions = await this.getTotalTransactions(guild.id);
+      } catch (e) {
+        console.error('[BalancePanel] Error getting transactions:', e.message);
+      }
 
- // Retornar embed de erro
- return new EmbedBuilder()
- .setTitle('🏦 SALDO DA GUILDA')
- .setDescription('❌ Erro ao carregar dados financeiros')
- .setColor(0xE74C3C)
- .setTimestamp();
- }
- }
+      try {
+        totalMembers = await this.getTotalMembersWithBalance(guild.id);
+      } catch (e) {
+        console.error('[BalancePanel] Error getting members:', e.message);
+      }
 
- static startAutoUpdate(guild, message) {
- // Limpar intervalo existente
- if (this.updateIntervals.has(guild.id)) {
- clearInterval(this.updateIntervals.get(guild.id));
- }
+      const embed = new EmbedBuilder()
+        .setTitle('🏦 Saldo da Guilda')
+        .setDescription(`**NOTAG - Gestão Financeira**\n\n💰 **Saldo Total:** \`${totalBalance.toLocaleString()}\` pratas`)
+        .addFields(
+          { name: '💸 Total Transações', value: `${totalTransactions}`, inline: true },
+          { name: '👥 Membros Ativos', value: `${totalMembers}`, inline: true },
+          { name: '📊 Taxa Padrão', value: '10%', inline: true }
+        )
+        .setColor(0x2ECC71)
+        .setTimestamp()
+        .setFooter({ text: 'Clique em Atualizar para ver valores atualizados' });
 
- // Atualizar a cada 2 minutos (120000 ms)
- const interval = setInterval(async () => {
- try {
- console.log(`[BalancePanel] Auto-updating panel for guild ${guild.id}`);
+      return embed;
+    } catch (error) {
+      console.error('[BalancePanel] Error creating embed:', error);
+      // Retorna embed de erro
+      return new EmbedBuilder()
+        .setTitle('🏦 Saldo da Guilda')
+        .setDescription('⚠️ Erro ao carregar dados financeiros.')
+        .setColor(0xE74C3C)
+        .setTimestamp();
+    }
+  }
 
- // Verificar se mensagem ainda existe
- const fetchedMessage = await message.channel.messages.fetch(message.id).catch(() => null);
- if (!fetchedMessage) {
- console.log(`[BalancePanel] Message deleted, stopping auto-update for guild ${guild.id}`);
- clearInterval(interval);
- this.updateIntervals.delete(guild.id);
- return;
- }
+  /**
+   * Conta total de transações da guilda
+   * @param {string} guildId - ID da guilda
+   */
+  static async getTotalTransactions(guildId) {
+    try {
+      if (!Database.db) {
+        console.warn('[BalancePanel] Database not initialized');
+        return 0;
+      }
 
- const newEmbed = await this.generateEmbed(guild);
+      const result = await Database.db.getAsync(`
+        SELECT COUNT(*) as count 
+        FROM transactions 
+        WHERE guild_id = ? AND type = 'taxa_guilda'
+      `, [guildId]);
 
- const row = new ActionRowBuilder()
- .addComponents(
- new ButtonBuilder()
- .setCustomId('btn_atualizar_saldo_guilda')
- .setLabel('🔄 Atualizar Agora')
- .setStyle(ButtonStyle.Primary)
- );
+      return result?.count || 0;
+    } catch (error) {
+      console.error('[BalancePanel] Error counting transactions:', error);
+      return 0;
+    }
+  }
 
- await message.edit({
- embeds: [newEmbed],
- components: [row]
- });
+  /**
+   * Conta membros com saldo/transações
+   * @param {string} guildId - ID da guilda
+   */
+  static async getTotalMembersWithBalance(guildId) {
+    try {
+      if (!Database.db) {
+        console.warn('[BalancePanel] Database not initialized');
+        return 0;
+      }
 
- } catch (error) {
- console.error(`[BalancePanel] Error in auto-update:`, error);
- }
- }, 120000); // 2 minutos
+      const result = await Database.db.getAsync(`
+        SELECT COUNT(DISTINCT user_id) as count 
+        FROM transactions 
+        WHERE guild_id = ?
+      `, [guildId]);
 
- this.updateIntervals.set(guild.id, interval);
- console.log(`[BalancePanel] Auto-update started for guild ${guild.id}`);
- }
+      return result?.count || 0;
+    } catch (error) {
+      console.error('[BalancePanel] Error counting members:', error);
+      return 0;
+    }
+  }
 
- static async handleManualUpdate(interaction) {
- try {
- console.log(`[BalancePanel] Manual update requested by ${interaction.user.id}`);
+  /**
+   * Inicia atualização automática do painel
+   * @param {Message} message - Mensagem do painel
+   * @param {Guild} guild - Objeto da guilda
+   */
+  static startAutoUpdate(message, guild) {
+    // Atualiza a cada 5 minutos
+    const interval = setInterval(async () => {
+      try {
+        // Verifica se mensagem ainda existe
+        const fetched = await message.fetch().catch(() => null);
+        if (!fetched) {
+          clearInterval(interval);
+          return;
+        }
 
- await interaction.deferUpdate();
+        const embed = await this.createPanelEmbed(guild);
+        await message.edit({ embeds: [embed] });
+      } catch (error) {
+        console.error('[BalancePanel] Auto-update error:', error);
+        clearInterval(interval);
+      }
+    }, 5 * 60 * 1000);
 
- const newEmbed = await this.generateEmbed(interaction.guild);
+    // Para após 1 hora para evitar memory leaks
+    setTimeout(() => clearInterval(interval), 60 * 60 * 1000);
+  }
 
- const row = new ActionRowBuilder()
- .addComponents(
- new ButtonBuilder()
- .setCustomId('btn_atualizar_saldo_guilda')
- .setLabel('🔄 Atualizar Agora')
- .setStyle(ButtonStyle.Primary)
- );
+  /**
+   * Handler para atualização manual
+   * @param {ButtonInteraction} interaction - Interação do botão
+   */
+  static async handleManualUpdate(interaction) {
+    try {
+      await interaction.deferUpdate();
 
- await interaction.editReply({
- embeds: [newEmbed],
- components: [row]
- });
+      const embed = await this.createPanelEmbed(interaction.guild);
+      await interaction.editReply({ embeds: [embed] });
 
- console.log(`[BalancePanel] Manual update completed`);
-
- } catch (error) {
- console.error(`[BalancePanel] Error in manual update:`, error);
- await interaction.reply({
- content: '❌ Erro ao atualizar painel.',
- ephemeral: true
- });
- }
- }
-
- static stopAutoUpdate(guildId) {
- if (this.updateIntervals.has(guildId)) {
- clearInterval(this.updateIntervals.get(guildId));
- this.updateIntervals.delete(guildId);
- console.log(`[BalancePanel] Stopped auto-update for guild ${guildId}`);
- }
- }
+    } catch (error) {
+      console.error('[BalancePanel] Manual update error:', error);
+      // Tenta responder se ainda não respondeu
+      if (!interaction.replied && !interaction.deferred) {
+        await interaction.reply({
+          content: '❌ Erro ao atualizar painel.',
+          ephemeral: true
+        });
+      }
+    }
+  }
 }
 
 module.exports = BalancePanelHandler;

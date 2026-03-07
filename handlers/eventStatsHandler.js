@@ -1,274 +1,179 @@
-const {
- EmbedBuilder,
- ActionRowBuilder,
- StringSelectMenuBuilder,
- StringSelectMenuOptionBuilder,
- ButtonBuilder,
- ButtonStyle
-} = require('discord.js');
+const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, PermissionFlagsBits } = require('discord.js');
 const Database = require('../utils/database');
 
+/**
+ * Handler de Estatísticas de Eventos
+ */
+
 class EventStatsHandler {
- constructor() {
- this.updateIntervals = new Map();
- }
+  /**
+   * Cria e envia o painel de estatísticas
+   * @param {TextChannel} channel - Canal onde enviar
+   * @param {Guild} guild - Objeto da guilda
+   */
+  static async createAndSendPanel(channel, guild) {
+    try {
+      // Verificações de segurança
+      if (!channel || !guild) {
+        console.error('[EventStats] Channel or guild is undefined');
+        return;
+      }
 
- static async sendPanel(channel) {
- try {
- console.log(`[EventStats] Sending panel to channel ${channel.id}`);
+      if (!channel.isTextBased()) {
+        console.error('[EventStats] Channel is not text-based');
+        return;
+      }
 
- const embed = new EmbedBuilder()
- .setTitle('📊 PAINEL DE EVENTOS')
- .setDescription(
- '**Acompanhe a participação dos membros nos eventos!**\n\n' +
- 'Selecione um período para visualizar as estatísticas detalhadas.\n' +
- 'Os dados são atualizados em tempo real.'
- )
- .setColor(0x3498DB)
- .setImage('https://i.imgur.com/JPepvGx.png') // Banner opcional
- .setFooter({ text: 'Sistema de Estatísticas • NOTAG Bot' })
- .setTimestamp();
+      // Obtém membro do bot
+      let botMember;
+      try {
+        botMember = await guild.members.fetch(channel.client.user.id);
+      } catch (e) {
+        botMember = guild.members.me;
+      }
 
- // Menu de seleção de período
- const row = new ActionRowBuilder()
- .addComponents(
- new StringSelectMenuBuilder()
- .setCustomId('select_periodo_eventos')
- .setPlaceholder('📅 Selecione o período')
- .addOptions(
- new StringSelectMenuOptionBuilder()
- .setLabel('7 Dias')
- .setValue('7d')
- .setDescription('Eventos dos últimos 7 dias')
- .setEmoji('📆'),
- new StringSelectMenuOptionBuilder()
- .setLabel('2 Semanas')
- .setValue('14d')
- .setDescription('Eventos dos últimos 14 dias')
- .setEmoji('📅'),
- new StringSelectMenuOptionBuilder()
- .setLabel('1 Mês')
- .setValue('30d')
- .setDescription('Eventos do último mês')
- .setEmoji('🗓️'),
- new StringSelectMenuOptionBuilder()
- .setLabel('3 Meses')
- .setValue('90d')
- .setDescription('Eventos dos últimos 3 meses')
- .setEmoji('📊'),
- new StringSelectMenuOptionBuilder()
- .setLabel('7 Meses')
- .setValue('210d')
- .setDescription('Eventos dos últimos 7 meses')
- .setEmoji('📈'),
- new StringSelectMenuOptionBuilder()
- .setLabel('1 Ano')
- .setValue('365d')
- .setDescription('Eventos do último ano')
- .setEmoji('🎂'),
- new StringSelectMenuOptionBuilder()
- .setLabel('Total (Todo o período)')
- .setValue('total')
- .setDescription('Todos os eventos registrados')
- .setEmoji('🌟')
- )
- );
+      if (!botMember) {
+        console.error('[EventStats] Bot member not found');
+        return;
+      }
 
- const botaoAtualizar = new ActionRowBuilder()
- .addComponents(
- new ButtonBuilder()
- .setCustomId('btn_atualizar_stats_eventos')
- .setLabel('🔄 Atualizar Dados')
- .setStyle(ButtonStyle.Primary)
- );
+      // Verifica permissões
+      let permissions;
+      try {
+        permissions = channel.permissionsFor(botMember);
+      } catch (e) {
+        console.error('[EventStats] Error getting permissions:', e.message);
+        return;
+      }
 
- await channel.send({
- embeds: [embed],
- components: [row, botaoAtualizar]
- });
+      if (!permissions || !permissions.has(PermissionFlagsBits.SendMessages)) {
+        console.error(`[EventStats] Missing SendMessages permission`);
+        return;
+      }
 
- console.log(`[EventStats] Panel sent successfully`);
+      const embed = await this.createStatsEmbed(guild);
 
- } catch (error) {
- console.error(`[EventStats] Error sending panel:`, error);
- throw error;
- }
- }
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('btn_atualizar_stats_eventos')
+          .setLabel('🔄 Atualizar')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId('btn_periodo_eventos')
+          .setLabel('📊 Período')
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(true) // Placeholder
+      );
 
- static async handlePeriodSelect(interaction) {
- try {
- const periodo = interaction.values[0];
- console.log(`[EventStats] Period selected: ${periodo}`);
+      await channel.send({ embeds: [embed], components: [row] });
+      console.log(`[EventStats] Panel sent to ${channel.name}`);
 
- await interaction.deferUpdate();
+    } catch (error) {
+      console.error('[EventStats] Error creating panel:', error);
+    }
+  }
 
- const dados = await this.calcularEstatisticas(interaction.guild, periodo);
- const embed = this.generateStatsEmbed(dados, periodo);
+  /**
+   * Cria o embed de estatísticas
+   * @param {Guild} guild - Objeto da guilda
+   */
+  static async createStatsEmbed(guild) {
+    try {
+      let totalEvents = 0;
+      let completedEvents = 0;
+      let totalLoot = 0;
+      let recentEventsList = [];
 
- await interaction.editReply({
- embeds: [embed],
- components: interaction.message.components
- });
+      try {
+        if (Database && Database.getEventHistory) {
+          const events = await Database.getEventHistory(guild.id, 10);
+          totalEvents = events.length;
+          completedEvents = events.filter(e => e.status === 'encerrado' || e.ended_at != null).length;
+          totalLoot = events.reduce((acc, e) => acc + (e.valor_total || 0), 0);
 
- } catch (error) {
- console.error(`[EventStats] Error handling period select:`, error);
- await interaction.reply({
- content: '❌ Erro ao carregar estatísticas.',
- ephemeral: true
- });
- }
- }
+          // Lista últimos 5 eventos
+          recentEventsList = events.slice(0, 5).map(e => {
+            const status = e.ended_at ? '✅' : '⏳';
+            const date = e.created_at ? new Date(e.created_at).toLocaleDateString('pt-BR') : 'N/A';
+            return `${status} ${e.nome || 'Evento'} - ${date}`;
+          });
+        } else {
+          console.warn('[EventStats] Database not available');
+        }
+      } catch (dbError) {
+        console.error('[EventStats] Database error:', dbError.message);
+      }
 
- static async calcularEstatisticas(guild, periodo) {
- try {
- // Calcular data de corte
- const agora = Date.now();
- let msAtras = 0;
+      const embed = new EmbedBuilder()
+        .setTitle('📊 Estatísticas de Eventos')
+        .setDescription(`**Resumo dos últimos eventos**`)
+        .addFields(
+          { name: '🎮 Total Eventos', value: `${totalEvents}`, inline: true },
+          { name: '✅ Completados', value: `${completedEvents}`, inline: true },
+          { name: '💰 Loot Total', value: `${totalLoot.toLocaleString()}`, inline: true }
+        )
+        .setColor(0x9B59B6)
+        .setTimestamp();
 
- switch(periodo) {
- case '7d': msAtras = 7 * 24 * 60 * 60 * 1000; break;
- case '14d': msAtras = 14 * 24 * 60 * 60 * 1000; break;
- case '30d': msAtras = 30 * 24 * 60 * 60 * 1000; break;
- case '90d': msAtras = 90 * 24 * 60 * 60 * 1000; break;
- case '210d': msAtras = 210 * 24 * 60 * 60 * 1000; break;
- case '365d': msAtras = 365 * 24 * 60 * 60 * 1000; break;
- case 'total': msAtras = Infinity; break;
- default: msAtras = 30 * 24 * 60 * 60 * 1000;
- }
+      // Adiciona lista de eventos recentes se houver
+      if (recentEventsList.length > 0) {
+        embed.addFields({ 
+          name: '📋 Eventos Recentes', 
+          value: recentEventsList.join('\n') || 'Nenhum evento recente', 
+          inline: false 
+        });
+      } else {
+        embed.addFields({ 
+          name: '📋 Eventos Recentes', 
+          value: 'Nenhum evento registrado ainda', 
+          inline: false 
+        });
+      }
 
- const dataCorte = periodo === 'total' ? 0 : agora - msAtras;
+      return embed;
+    } catch (error) {
+      console.error('[EventStats] Error creating embed:', error);
+      return new EmbedBuilder()
+        .setTitle('📊 Estatísticas de Eventos')
+        .setDescription('Erro ao carregar estatísticas. Tente novamente mais tarde.')
+        .setColor(0xE74C3C);
+    }
+  }
 
- // Buscar histórico de eventos
- const eventHistory = Database.eventHistory || [];
- const membrosStats = new Map();
+  /**
+   * Handler para atualização manual
+   * @param {ButtonInteraction} interaction - Interação do botão
+   */
+  static async handleAtualizar(interaction) {
+    try {
+      await interaction.deferUpdate();
+      const embed = await this.createStatsEmbed(interaction.guild);
+      await interaction.editReply({ embeds: [embed] });
+    } catch (error) {
+      console.error('[EventStats] Update error:', error);
+      if (!interaction.replied && !interaction.deferred) {
+        await interaction.reply({ 
+          content: '❌ Erro ao atualizar estatísticas.', 
+          ephemeral: true 
+        });
+      }
+    }
+  }
 
- // Processar eventos do período
- eventHistory.forEach(event => {
- if (event.timestamp >= dataCorte && event.guildId === guild.id) {
- // Processar participantes
- if (event.dados && event.dados.distribuicao) {
- event.dados.distribuicao.forEach(participante => {
- const stats = membrosStats.get(participante.userId) || {
- userId: participante.userId,
- nome: participante.nick || 'Desconhecido',
- eventos: 0,
- valorTotal: 0,
- tempoTotal: 0
- };
-
- stats.eventos++;
- stats.valorTotal += participante.valor || 0;
- stats.tempoTotal += participante.tempo || 0;
- membrosStats.set(participante.userId, stats);
- });
- }
- }
- });
-
- // Converter para array e ordenar por número de eventos
- const lista = Array.from(membrosStats.values())
- .sort((a, b) => b.eventos - a.eventos);
-
- return {
- periodo: periodo,
- totalEventos: eventHistory.filter(e => e.timestamp >= dataCorte).length,
- totalParticipacoes: lista.reduce((acc, m) => acc + m.eventos, 0),
- membros: lista,
- dataCorte: new Date(dataCorte).toLocaleDateString('pt-BR')
- };
-
- } catch (error) {
- console.error(`[EventStats] Error calculating stats:`, error);
- return { periodo, totalEventos: 0, totalParticipacoes: 0, membros: [], dataCorte: 'N/A' };
- }
- }
-
- static generateStatsEmbed(dados, periodo) {
- const periodosNomes = {
- '7d': '7 Dias',
- '14d': '2 Semanas',
- '30d': '1 Mês',
- '90d': '3 Meses',
- '210d': '7 Meses',
- '365d': '1 Ano',
- 'total': 'Todo o Período'
- };
-
- const embed = new EmbedBuilder()
- .setTitle(`📊 ESTATÍSTICAS DE EVENTOS - ${periodosNomes[periodo]}`)
- .setDescription(
- `**Período:** ${dados.dataCorte} até agora\n` +
- `**Total de Eventos:** \`${dados.totalEventos}\`\n` +
- `**Total de Participações:** \`${dados.totalParticipacoes}\``
- )
- .setColor(0x3498DB)
- .setTimestamp();
-
- // Top 20 membros
- const topMembros = dados.membros.slice(0, 20);
-
- if (topMembros.length === 0) {
- embed.addFields({
- name: '📋 Nenhum dado',
- value: 'Não há eventos registrados neste período.',
- inline: false
- });
- } else {
- let descricao = '';
- topMembros.forEach((membro, index) => {
- const medalha = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : '•';
- const tempoHoras = Math.floor(membro.tempoTotal / 1000 / 60 / 60);
- descricao += `${medalha} **${membro.nome}** - ${membro.eventos} eventos | ${tempoHoras}h | ${membro.valorTotal.toLocaleString()}\n`;
- });
-
- embed.addFields({
- name: `👥 Top Participantes (${topMembros.length})`,
- value: descricao || 'Nenhum participante encontrado.',
- inline: false
- });
- }
-
- // Adicionar legenda
- embed.addFields({
- name: '📝 Legenda',
- value: '`Eventos` | `Horas` | `Valor Total Recebido`',
- inline: false
- });
-
- return embed;
- }
-
- static async handleAtualizar(interaction) {
- try {
- await interaction.deferUpdate();
-
- // Recuperar período atual do embed
- const embedAtual = interaction.message.embeds[0];
- let periodo = '30d'; // Default
-
- if (embedAtual.title.includes('7 Dias')) periodo = '7d';
- else if (embedAtual.title.includes('2 Semanas')) periodo = '14d';
- else if (embedAtual.title.includes('3 Meses')) periodo = '90d';
- else if (embedAtual.title.includes('7 Meses')) periodo = '210d';
- else if (embedAtual.title.includes('1 Ano')) periodo = '365d';
- else if (embedAtual.title.includes('Todo o Período')) periodo = 'total';
-
- const dados = await this.calcularEstatisticas(interaction.guild, periodo);
- const novoEmbed = this.generateStatsEmbed(dados, periodo);
-
- await interaction.editReply({
- embeds: [novoEmbed],
- components: interaction.message.components
- });
-
- } catch (error) {
- console.error(`[EventStats] Error updating:`, error);
- await interaction.reply({
- content: '❌ Erro ao atualizar estatísticas.',
- ephemeral: true
- });
- }
- }
+  /**
+   * Handler para seleção de período (placeholder)
+   * @param {SelectMenuInteraction} interaction - Interação do select menu
+   */
+  static async handlePeriodSelect(interaction) {
+    try {
+      await interaction.reply({ 
+        content: '📊 Seleção de período em desenvolvimento.', 
+        ephemeral: true 
+      });
+    } catch (error) {
+      console.error('[EventStats] Period select error:', error);
+    }
+  }
 }
 
 module.exports = EventStatsHandler;
