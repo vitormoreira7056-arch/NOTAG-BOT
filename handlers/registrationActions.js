@@ -7,96 +7,25 @@ const {
 } = require('discord.js');
 
 class RegistrationActions {
-  static async initialize() {
-    console.log('[RegistrationActions] Initialized');
+  static initialize() {
+    console.log('📝 Registration Actions initialized');
   }
 
-  static checkBlacklist(nick, userId) {
-    try {
-      if (global.blacklist && global.blacklist.has(userId)) {
-        const data = global.blacklist.get(userId);
-        return {
-          isBlacklisted: true,
-          reason: data.motivo || 'Banido do servidor'
-        };
-      }
-
-      if (global.blacklist) {
-        for (const [id, data] of global.blacklist.entries()) {
-          if (data.nick && data.nick.toLowerCase() === nick.toLowerCase()) {
-            return {
-              isBlacklisted: true,
-              reason: data.motivo || 'Nick banido do servidor'
-            };
-          }
-        }
-      }
-
-      return {
-        isBlacklisted: false,
-        reason: null
-      };
-    } catch (error) {
-      console.error('[RegistrationActions] Error checking blacklist:', error);
-      return {
-        isBlacklisted: false,
-        reason: null
-      };
-    }
-  }
-
-  static getHistoricoRecusas(userId, nick) {
-    try {
-      if (!global.historicoRegistros || !global.historicoRegistros.has(userId)) {
-        return [];
-      }
-
-      const historico = global.historicoRegistros.get(userId);
-      return historico.filter(h => h.tipo === 'recusado' || h.status === 'recusado');
-    } catch (error) {
-      console.error('[RegistrationActions] Error getting historico:', error);
-      return [];
-    }
-  }
-
-  static async checkExistingRegistration(guild, userId, nick) {
-    const erros = [];
-
-    const membroExistente = await guild.members.fetch(userId).catch(() => null);
-    if (membroExistente) {
-      const roles = ['Membro', 'Aliança', 'Convidado'];
-      const temCargo = membroExistente.roles.cache.some(r => roles.includes(r.name));
-      if (temCargo) {
-        erros.push('Você já está registrado neste servidor!');
-      }
-    }
-
-    const membros = await guild.members.fetch();
-    const nickExistente = membros.find(m =>
-      m.nickname?.toLowerCase() === nick.toLowerCase() ||
-      m.user.username.toLowerCase() === nick.toLowerCase()
-    );
-
-    if (nickExistente && nickExistente.id !== userId) {
-      erros.push(`O nick "${nick}" já está em uso por outro jogador!`);
-    }
-
-    if (global.blacklist.has(userId)) {
-      erros.push('Você está na blacklist e não pode se registrar!');
-    }
-
-    return erros;
-  }
-
-  // 🎯 FUNÇÃO AUXILIAR: Verificar permissão de recrutador/ADM
+  /**
+   * Verifica permissões de recrutador (melhorado)
+   */
   static async checkRecruiterPermission(interaction) {
-    const isRecrutador = interaction.member.roles.cache.some(r => r.name === 'Recrutador') ||
-      interaction.member.roles.cache.some(r => r.name === 'ADM') ||
-      interaction.member.permissions.has(PermissionFlagsBits.Administrator);
+    const isRecrutador = interaction.member.roles.cache.some(r => 
+      r.name === 'Recrutador' || 
+      r.name === 'Recrutadora' ||  // Variação de gênero
+      r.name === 'ADM' ||
+      r.name === 'Staff' ||
+      r.name === 'Staffer'
+    ) || interaction.member.permissions.has(PermissionFlagsBits.Administrator);
 
     if (!isRecrutador) {
       await interaction.reply({
-        content: '❌ Apenas Recrutadores ou ADMs podem aprovar registros!',
+        content: '❌ Apenas Recrutadores, Staff ou ADMs podem aprovar registros!',
         ephemeral: true
       });
       return false;
@@ -106,10 +35,7 @@ class RegistrationActions {
 
   static async approveAsMember(interaction, regId) {
     try {
-      // 🎯 CORREÇÃO: Verificar permissão primeiro
       if (!(await this.checkRecruiterPermission(interaction))) return;
-
-      console.log(`[Registration] Approving as member: ${regId}`);
 
       const registro = global.registrosPendentes.get(regId);
       if (!registro) {
@@ -119,71 +45,71 @@ class RegistrationActions {
         });
       }
 
-      // 🎯 CORREÇÃO: Extrair dados corretamente da estrutura aninhada
-      const { userId, dados } = registro;
-      const membro = await interaction.guild.members.fetch(userId).catch(() => null);
+      const { member, nick, guilda, server, plataforma, arma } = registro;
 
-      if (!membro) {
-        return interaction.reply({
-          content: '❌ Usuário não encontrado no servidor!',
-          ephemeral: true
-        });
+      // Aplicar nickname
+      try {
+        await member.setNickname(nick);
+      } catch (e) {
+        console.log('[Registration] Não foi possível alterar nickname');
       }
 
+      // Adicionar cargo de Membro
       const cargoMembro = interaction.guild.roles.cache.find(r => r.name === 'Membro');
       if (cargoMembro) {
-        await membro.roles.add(cargoMembro);
+        await member.roles.add(cargoMembro);
       }
 
-      await membro.setNickname(dados.nick);
-
-      if (!global.historicoRegistros.has(userId)) {
-        global.historicoRegistros.set(userId, []);
-      }
-      global.historicoRegistros.get(userId).push({
-        tipo: 'membro',
-        dados: dados,
-        aprovadoPor: interaction.user.id,
-        data: Date.now()
-      });
-
-      global.registrosPendentes.delete(regId);
-
-      const embedAprovacao = new EmbedBuilder()
-        .setTitle('✅ REGISTRO APROVADO!')
+      // Criar embed de aprovação
+      const embedAprovado = new EmbedBuilder()
+        .setTitle('✅ REGISTRO APROVADO - MEMBRO')
         .setDescription(
-          `🎉 **Parabéns!** Seu registro foi aprovado com sucesso!\n\n` +
-          `\> **Nick:** \`${dados.nick}\`\n` +
-          `\> **Guilda:** \`${dados.guilda}\`\n` +
-          `\> **Plataforma:** \`${dados.platform}\`\n` +
-          `\> **Arma:** \`${dados.arma}\`\n` +
-          `\> **Cargo:** ⚔️ **Membro**\n` +
-          `\> **Aprovado por:** \`${interaction.user.tag}\`\n` +
-          `\> **Data:** ${new Date().toLocaleString('pt-BR')}\n\n` +
-          `🚀 **Bem-vindo oficialmente à NOTAG!**\n` +
-          `💰 Você agora tem acesso ao sistema financeiro e pode participar de eventos.`
+          `**Jogador:** ${nick}\n` +
+          `**Guilda:** ${guilda}\n` +
+          `**Server:** ${server}\n` +
+          `**Plataforma:** ${plataforma}\n` +
+          `**Arma Principal:** ${arma}\n` +
+          `**Aprovado por:** ${interaction.user.tag}\n` +
+          `**Status:** Membro`
         )
         .setColor(0x2ECC71)
-        .setFooter({ text: 'NOTAG Bot • Sistema de Recrutamento' })
         .setTimestamp();
 
-      try {
-        await membro.send({ embeds: [embedAprovacao] });
-      } catch (e) {
-        console.log(`[Registration] Could not DM user ${userId}`);
+      // Enviar mensagem no canal de logs
+      const canalLogs = interaction.guild.channels.cache.find(c => c.name === 'logs-registros');
+      if (canalLogs) {
+        await canalLogs.send({ embeds: [embedAprovado] });
       }
 
+      // Enviar DM para o usuário
+      try {
+        await member.send({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle('✅ SEU REGISTRO FOI APROVADO!')
+              .setDescription(`Parabéns! Você foi aceito como **Membro** da guilda.\nSeu nickname foi alterado para: \`${nick}\``)
+              .setColor(0x2ECC71)
+              .setTimestamp()
+          ]
+        });
+      } catch (e) {
+        console.log('[Registration] Não foi possível enviar DM');
+      }
+
+      // Limpar registro pendente
+      global.registrosPendentes.delete(regId);
+      global.registroTemp.delete(regId);
+
       await interaction.update({
-        content: `✅ Registro aprovado! ${dados.nick} agora é Membro.`,
-        components: []
+        content: `✅ **${nick}** aprovado como Membro!`,
+        components: [],
+        embeds: []
       });
 
-      console.log(`[Registration] Member approved: ${dados.nick}`);
-
     } catch (error) {
-      console.error(`[Registration] Error approving member:`, error);
+      console.error('[Registration] Error approving member:', error);
       await interaction.reply({
-        content: '❌ Erro ao aprovar registro.',
+        content: '❌ Erro ao aprovar membro.',
         ephemeral: true
       });
     }
@@ -193,8 +119,6 @@ class RegistrationActions {
     try {
       if (!(await this.checkRecruiterPermission(interaction))) return;
 
-      console.log(`[Registration] Approving as alliance: ${regId}`);
-
       const registro = global.registrosPendentes.get(regId);
       if (!registro) {
         return interaction.reply({
@@ -203,70 +127,65 @@ class RegistrationActions {
         });
       }
 
-      const { userId, dados } = registro;
-      const membro = await interaction.guild.members.fetch(userId).catch(() => null);
+      const { member, nick, guilda, server, plataforma, arma } = registro;
 
-      if (!membro) {
-        return interaction.reply({
-          content: '❌ Usuário não encontrado no servidor!',
-          ephemeral: true
-        });
+      try {
+        await member.setNickname(nick);
+      } catch (e) {
+        console.log('[Registration] Não foi possível alterar nickname');
       }
 
       const cargoAlianca = interaction.guild.roles.cache.find(r => r.name === 'Aliança');
       if (cargoAlianca) {
-        await membro.roles.add(cargoAlianca);
+        await member.roles.add(cargoAlianca);
       }
 
-      await membro.setNickname(dados.nick);
-
-      if (!global.historicoRegistros.has(userId)) {
-        global.historicoRegistros.set(userId, []);
-      }
-      global.historicoRegistros.get(userId).push({
-        tipo: 'alianca',
-        dados: dados,
-        aprovadoPor: interaction.user.id,
-        data: Date.now()
-      });
-
-      global.registrosPendentes.delete(regId);
-
-      const embedAprovacao = new EmbedBuilder()
-        .setTitle('✅ REGISTRO APROVADO!')
+      const embedAprovado = new EmbedBuilder()
+        .setTitle('✅ REGISTRO APROVADO - ALIANÇA')
         .setDescription(
-          `🎉 **Parabéns!** Seu registro foi aprovado como Aliança!\n\n` +
-          `\> **Nick:** \`${dados.nick}\`\n` +
-          `\> **Guilda:** \`${dados.guilda}\`\n` +
-          `\> **Plataforma:** \`${dados.platform}\`\n` +
-          `\> **Arma:** \`${dados.arma}\`\n` +
-          `\> **Cargo:** 🤝 **Aliança**\n` +
-          `\> **Aprovado por:** \`${interaction.user.tag}\`\n` +
-          `\> **Data:** ${new Date().toLocaleString('pt-BR')}\n\n` +
-          `🚀 **Bem-vindo à NOTAG como Aliança!**\n` +
-          `💰 Você tem acesso limitado aos sistemas da guilda.`
+          `**Jogador:** ${nick}\n` +
+          `**Guilda:** ${guilda}\n` +
+          `**Server:** ${server}\n` +
+          `**Plataforma:** ${plataforma}\n` +
+          `**Arma Principal:** ${arma}\n` +
+          `**Aprovado por:** ${interaction.user.tag}\n` +
+          `**Status:** Aliança`
         )
-        .setColor(0xE67E22)
-        .setFooter({ text: 'NOTAG Bot • Sistema de Recrutamento' })
+        .setColor(0x3498DB)
         .setTimestamp();
 
-      try {
-        await membro.send({ embeds: [embedAprovacao] });
-      } catch (e) {
-        console.log(`[Registration] Could not DM user ${userId}`);
+      const canalLogs = interaction.guild.channels.cache.find(c => c.name === 'logs-registros');
+      if (canalLogs) {
+        await canalLogs.send({ embeds: [embedAprovado] });
       }
 
+      try {
+        await member.send({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle('✅ SEU REGISTRO FOI APROVADO!')
+              .setDescription(`Parabéns! Você foi aceito como **Aliança**.\nSeu nickname foi alterado para: \`${nick}\``)
+              .setColor(0x3498DB)
+              .setTimestamp()
+          ]
+        });
+      } catch (e) {
+        console.log('[Registration] Não foi possível enviar DM');
+      }
+
+      global.registrosPendentes.delete(regId);
+      global.registroTemp.delete(regId);
+
       await interaction.update({
-        content: `✅ Registro aprovado! ${dados.nick} agora é Aliança.`,
-        components: []
+        content: `✅ **${nick}** aprovado como Aliança!`,
+        components: [],
+        embeds: []
       });
 
-      console.log(`[Registration] Alliance approved: ${dados.nick}`);
-
     } catch (error) {
-      console.error(`[Registration] Error approving alliance:`, error);
+      console.error('[Registration] Error approving alliance:', error);
       await interaction.reply({
-        content: '❌ Erro ao aprovar registro.',
+        content: '❌ Erro ao apropar aliança.',
         ephemeral: true
       });
     }
@@ -276,8 +195,6 @@ class RegistrationActions {
     try {
       if (!(await this.checkRecruiterPermission(interaction))) return;
 
-      console.log(`[Registration] Approving as guest: ${regId}`);
-
       const registro = global.registrosPendentes.get(regId);
       if (!registro) {
         return interaction.reply({
@@ -286,70 +203,65 @@ class RegistrationActions {
         });
       }
 
-      const { userId, dados } = registro;
-      const membro = await interaction.guild.members.fetch(userId).catch(() => null);
+      const { member, nick, guilda, server, plataforma, arma } = registro;
 
-      if (!membro) {
-        return interaction.reply({
-          content: '❌ Usuário não encontrado no servidor!',
-          ephemeral: true
-        });
+      try {
+        await member.setNickname(nick);
+      } catch (e) {
+        console.log('[Registration] Não foi possível alterar nickname');
       }
 
       const cargoConvidado = interaction.guild.roles.cache.find(r => r.name === 'Convidado');
       if (cargoConvidado) {
-        await membro.roles.add(cargoConvidado);
+        await member.roles.add(cargoConvidado);
       }
 
-      await membro.setNickname(dados.nick);
-
-      if (!global.historicoRegistros.has(userId)) {
-        global.historicoRegistros.set(userId, []);
-      }
-      global.historicoRegistros.get(userId).push({
-        tipo: 'convidado',
-        dados: dados,
-        aprovadoPor: interaction.user.id,
-        data: Date.now()
-      });
-
-      global.registrosPendentes.delete(regId);
-
-      const embedAprovacao = new EmbedBuilder()
-        .setTitle('✅ REGISTRO APROVADO!')
+      const embedAprovado = new EmbedBuilder()
+        .setTitle('✅ REGISTRO APROVADO - CONVIDADO')
         .setDescription(
-          `🎉 **Parabéns!** Seu registro foi aprovado!\n\n` +
-          `\> **Nick:** \`${dados.nick}\`\n` +
-          `\> **Guilda:** \`${dados.guilda}\`\n` +
-          `\> **Plataforma:** \`${dados.platform}\`\n` +
-          `\> **Arma:** \`${dados.arma}\`\n` +
-          `\> **Cargo:** 🎫 **Convidado**\n` +
-          `\> **Aprovado por:** \`${interaction.user.tag}\`\n` +
-          `\> **Data:** ${new Date().toLocaleString('pt-BR')}\n\n` +
-          `🚀 **Bem-vindo à NOTAG como Convidado!**\n` +
-          `⚠️ Seu acesso é temporário e limitado.`
+          `**Jogador:** ${nick}\n` +
+          `**Guilda:** ${guilda}\n` +
+          `**Server:** ${server}\n` +
+          `**Plataforma:** ${plataforma}\n` +
+          `**Arma Principal:** ${arma}\n` +
+          `**Aprovado por:** ${interaction.user.tag}\n` +
+          `**Status:** Convidado`
         )
-        .setColor(0x95A5A6)
-        .setFooter({ text: 'NOTAG Bot • Sistema de Recrutamento' })
+        .setColor(0xF1C40F)
         .setTimestamp();
 
-      try {
-        await membro.send({ embeds: [embedAprovacao] });
-      } catch (e) {
-        console.log(`[Registration] Could not DM user ${userId}`);
+      const canalLogs = interaction.guild.channels.cache.find(c => c.name === 'logs-registros');
+      if (canalLogs) {
+        await canalLogs.send({ embeds: [embedAprovado] });
       }
 
+      try {
+        await member.send({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle('✅ SEU REGISTRO FOI APROVADO!')
+              .setDescription(`Bem-vindo! Você foi aceito como **Convidado**.\nSeu nickname foi alterado para: \`${nick}\``)
+              .setColor(0xF1C40F)
+              .setTimestamp()
+          ]
+        });
+      } catch (e) {
+        console.log('[Registration] Não foi possível enviar DM');
+      }
+
+      global.registrosPendentes.delete(regId);
+      global.registroTemp.delete(regId);
+
       await interaction.update({
-        content: `✅ Registro aprovado! ${dados.nick} agora é Convidado.`,
-        components: []
+        content: `✅ **${nick}** aprovado como Convidado!`,
+        components: [],
+        embeds: []
       });
 
-      console.log(`[Registration] Guest approved: ${dados.nick}`);
-
     } catch (error) {
-      console.error(`[Registration] Error approving guest:`, error);
+      console.error('[Registration] Error approving guest:', error);
       await interaction.reply({
-        content: '❌ Erro ao aprovar registro.',
+        content: '❌ Erro ao aprovar convidado.',
         ephemeral: true
       });
     }
@@ -359,29 +271,22 @@ class RegistrationActions {
     try {
       if (!(await this.checkRecruiterPermission(interaction))) return;
 
-      console.log(`[Registration] Showing rejection modal for: ${regId}`);
+      const modal = new ModalBuilder()
+        .setCustomId(`modal_recusar_registro_${regId}`)
+        .setTitle('Motivo da Recusa');
 
-      const modal = {
-        title: 'Recusar Registro',
-        custom_id: `modal_recusar_registro_${regId}`,
-        components: [{
-          type: 1,
-          components: [{
-            type: 4,
-            custom_id: 'motivo_recusa',
-            label: 'Motivo da recusa',
-            style: 2,
-            placeholder: 'Explique o motivo da recusa...',
-            required: true,
-            max_length: 1000
-          }]
-        }]
-      };
+      const motivoInput = new TextInputBuilder()
+        .setCustomId('motivo_recusa')
+        .setLabel('Explique o motivo da recusa')
+        .setStyle(TextInputStyle.Paragraph)
+        .setRequired(true)
+        .setMaxLength(1000);
 
+      modal.addComponents(new ActionRowBuilder().addComponents(motivoInput));
       await interaction.showModal(modal);
 
     } catch (error) {
-      console.error(`[Registration] Error showing rejection modal:`, error);
+      console.error('[Registration] Error showing rejection modal:', error);
       await interaction.reply({
         content: '❌ Erro ao abrir modal de recusa.',
         ephemeral: true
@@ -401,66 +306,51 @@ class RegistrationActions {
         });
       }
 
-      const { userId, dados } = registro;
-      const membro = await interaction.guild.members.fetch(userId).catch(() => null);
+      const { member, nick } = registro;
 
-      if (!global.historicoRegistros.has(userId)) {
-        global.historicoRegistros.set(userId, []);
+      // Enviar DM para o usuário
+      try {
+        await member.send({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle('❌ SEU REGISTRO FOI RECUSADO')
+              .setDescription(`Seu registro foi recusado.\n\n**Motivo:** ${motivo}\n\nVocê pode tentar novamente quando quiser.`)
+              .setColor(0xE74C3C)
+              .setTimestamp()
+          ]
+        });
+      } catch (e) {
+        console.log('[Registration] Não foi possível enviar DM de recusa');
       }
-      global.historicoRegistros.get(userId).push({
-        tipo: 'recusado',
-        status: 'recusado',
-        motivo: motivo,
-        dados: dados,
-        recusadoPor: interaction.user.id,
-        data: Date.now()
-      });
+
+      // Log de recusa
+      const canalLogs = interaction.guild.channels.cache.find(c => c.name === 'logs-registros');
+      if (canalLogs) {
+        await canalLogs.send({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle('❌ REGISTRO RECUSADO')
+              .setDescription(
+                `**Jogador:** ${nick}\n` +
+                `**Recusado por:** ${interaction.user.tag}\n` +
+                `**Motivo:** ${motivo}`
+              )
+              .setColor(0xE74C3C)
+              .setTimestamp()
+          ]
+        });
+      }
 
       global.registrosPendentes.delete(regId);
-
-      const embedRecusa = new EmbedBuilder()
-        .setTitle('❌ REGISTRO RECUSADO')
-        .setDescription(
-          `⚠️ **Seu registro foi recusado.**\n\n` +
-          `\> **Nick:** \`${dados.nick}\`\n` +
-          `\> **Motivo:** \`\`\`${motivo}\`\`\`\n` +
-          `\> **Recusado por:** \`${interaction.user.tag}\`\n` +
-          `\> **Data:** ${new Date().toLocaleString('pt-BR')}\n\n` +
-          `💡 **O que fazer?**\n` +
-          `• Verifique se suas informações estão corretas\n` +
-          `• Entre em contato com um recrutador\n` +
-          `• Tente se registrar novamente quando estiver pronto`
-        )
-        .setColor(0xE74C3C)
-        .setFooter({ text: 'NOTAG Bot • Sistema de Recrutamento' })
-        .setTimestamp();
-
-      if (membro) {
-        try {
-          await membro.send({ embeds: [embedRecusa] });
-        } catch (e) {
-          console.log(`[Registration] Could not DM user ${userId}`);
-        }
-      }
+      global.registroTemp.delete(regId);
 
       await interaction.reply({
-        content: `❌ Registro de ${dados.nick} recusado. Motivo enviado no privado.`,
+        content: `❌ **${nick}** recusado. Motivo enviado por DM.`,
         ephemeral: true
       });
 
-      try {
-        await interaction.message?.edit({
-          content: `❌ **REGISTRO RECUSADO**\n**Nick:** ${dados.nick}\n**Motivo:** ${motivo}\n**Por:** ${interaction.user.tag}`,
-          components: []
-        });
-      } catch (e) {
-        console.log('[Registration] Could not edit original message');
-      }
-
-      console.log(`[Registration] Registration rejected: ${dados.nick}`);
-
     } catch (error) {
-      console.error(`[Registration] Error processing rejection:`, error);
+      console.error('[Registration] Error processing rejection:', error);
       await interaction.reply({
         content: '❌ Erro ao processar recusa.',
         ephemeral: true
@@ -472,74 +362,24 @@ class RegistrationActions {
     try {
       if (!(await this.checkRecruiterPermission(interaction))) return;
 
-      console.log(`[Registration] Adding to blacklist: ${regId}`);
+      const modal = new ModalBuilder()
+        .setCustomId(`modal_blacklist_${regId}`)
+        .setTitle('Adicionar à Blacklist');
 
-      const registro = global.registrosPendentes.get(regId);
-      if (!registro) {
-        return interaction.reply({
-          content: '❌ Registro não encontrado!',
-          ephemeral: true
-        });
-      }
+      const motivoInput = new TextInputBuilder()
+        .setCustomId('motivo_blacklist')
+        .setLabel('Motivo da blacklist')
+        .setStyle(TextInputStyle.Paragraph)
+        .setRequired(true)
+        .setMaxLength(1000);
 
-      const { userId, dados } = registro;
-
-      global.blacklist.set(userId, {
-        nick: dados.nick,
-        guilda: dados.guilda,
-        data: Date.now(),
-        adicionadoPor: interaction.user.id
-      });
-
-      global.registrosPendentes.delete(regId);
-
-      const embedBlacklist = new EmbedBuilder()
-        .setTitle('🚫 BANIDO DO SERVIDOR')
-        .setDescription(
-          `⚠️ **Você foi adicionado à blacklist!**\n\n` +
-          `\> **Nick:** \`${dados.nick}\`\n` +
-          `\> **Guilda:** \`${dados.guilda}\`\n` +
-          `\> **Adicionado por:** \`${interaction.user.tag}\`\n` +
-          `\> **Data:** ${new Date().toLocaleString('pt-BR')}\n\n` +
-          `🚫 **Você não pode mais se registrar neste servidor.**\n\n` +
-          `💡 *Se você acredita que isso foi um erro, entre em contato com a administração.*`
-        )
-        .setColor(0x000000)
-        .setFooter({ text: 'NOTAG Bot • Sistema de Segurança' })
-        .setTimestamp();
-
-      const membro = await interaction.guild.members.fetch(userId).catch(() => null);
-      if (membro) {
-        try {
-          await membro.send({ embeds: [embedBlacklist] });
-        } catch (e) {
-          console.log(`[Registration] Could not DM user ${userId}`);
-        }
-
-        try {
-          await membro.kick('Adicionado à blacklist');
-        } catch (e) {
-          console.log(`[Registration] Could not kick user ${userId}`);
-        }
-      }
-
-      await interaction.update({
-        content: `🚫 ${dados.nick} adicionado à blacklist e removido do servidor.`,
-        components: []
-      });
-
-      const fs = require('fs');
-      if (!fs.existsSync('./data')) {
-        fs.mkdirSync('./data', { recursive: true });
-      }
-      fs.writeFileSync('./data/blacklist.json', JSON.stringify([...global.blacklist], null, 2));
-
-      console.log(`[Registration] User blacklisted: ${dados.nick}`);
+      modal.addComponents(new ActionRowBuilder().addComponents(motivoInput));
+      await interaction.showModal(modal);
 
     } catch (error) {
-      console.error(`[Registration] Error adding to blacklist:`, error);
+      console.error('[Registration] Error showing blacklist modal:', error);
       await interaction.reply({
-        content: '❌ Erro ao adicionar à blacklist.',
+        content: '❌ Erro ao abrir modal de blacklist.',
         ephemeral: true
       });
     }
@@ -548,22 +388,97 @@ class RegistrationActions {
   static async processBlacklistAdd(interaction, regId) {
     try {
       const motivo = interaction.fields.getTextInputValue('motivo_blacklist');
-
       const registro = global.registrosPendentes.get(regId);
-      if (registro && global.blacklist.has(registro.userId)) {
-        const data = global.blacklist.get(registro.userId);
-        data.motivo = motivo;
-        global.blacklist.set(registro.userId, data);
+
+      if (!registro) {
+        return interaction.reply({
+          content: '❌ Registro não encontrado!',
+          ephemeral: true
+        });
       }
 
-      await this.handleBlacklistAdd(interaction, regId);
-    } catch (error) {
-      console.error(`[Registration] Error processing blacklist add:`, error);
+      const { member, nick, guilda } = registro;
+
+      // Adicionar à blacklist
+      global.blacklist.set(member.id, {
+        nick: nick,
+        guilda: guilda,
+        motivo: motivo,
+        adicionadoPor: interaction.user.tag,
+        data: Date.now()
+      });
+
+      // Banir do servidor
+      try {
+        await member.ban({ reason: `Blacklist: ${motivo}` });
+      } catch (e) {
+        console.log('[Registration] Não foi possível banir usuário');
+      }
+
+      // Log
+      const canalLogs = interaction.guild.channels.cache.find(c => c.name === 'logs-blacklist');
+      if (canalLogs) {
+        await canalLogs.send({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle('🚫 USUÁRIO ADICIONADO À BLACKLIST')
+              .setDescription(
+                `**Usuário:** ${nick} (${member.id})\n` +
+                `**Guilda:** ${guilda}\n` +
+                `**Motivo:** ${motivo}\n` +
+                `**Adicionado por:** ${interaction.user.tag}`
+              )
+              .setColor(0x000000)
+              .setTimestamp()
+          ]
+        });
+      }
+
+      global.registrosPendentes.delete(regId);
+      global.registroTemp.delete(regId);
+
       await interaction.reply({
-        content: '❌ Erro ao processar blacklist.',
+        content: `🚫 **${nick}** adicionado à blacklist e banido!`,
+        ephemeral: true
+      });
+
+    } catch (error) {
+      console.error('[Registration] Error adding to blacklist:', error);
+      await interaction.reply({
+        content: '❌ Erro ao adicionar à blacklist.',
         ephemeral: true
       });
     }
+  }
+
+  static async checkExistingRegistration(guild, userId, nick) {
+    const erros = [];
+
+    // Verificar se já está registrado
+    const membro = guild.members.cache.get(userId);
+    if (membro && membro.roles.cache.some(r => 
+      r.name === 'Membro' || 
+      r.name === 'Aliança' || 
+      r.name === 'Convidado'
+    )) {
+      erros.push('Você já está registrado neste servidor!');
+    }
+
+    // Verificar blacklist
+    if (global.blacklist.has(userId)) {
+      const dados = global.blacklist.get(userId);
+      erros.push(`🚫 Você está na blacklist! Motivo: ${dados.motivo}`);
+    }
+
+    // Verificar se nick já existe
+    const membroComMesmoNick = guild.members.cache.find(m => 
+      m.nickname === nick && m.id !== userId
+    );
+    if (membroComMesmoNick) {
+      erros.push(`O nickname "${nick}" já está em uso por outro jogador!`);
+    }
+
+    return erros;
   }
 }
 

@@ -1,66 +1,56 @@
-const { 
-  EmbedBuilder, 
-  ActionRowBuilder, 
-  ButtonBuilder, 
-  ButtonStyle,
-  StringSelectMenuBuilder,
-  StringSelectMenuOptionBuilder,
-  ModalBuilder,
-  TextInputBuilder,
-  TextInputStyle
+const {
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle
 } = require('discord.js');
+const Database = require('../utils/database');
 
 class ConfigPanel {
   // Criar embed do painel de configurações
-  static createConfigEmbed(guildId) {
-    const config = global.guildConfig?.get(guildId) || {
-      idioma: 'PT-BR',
-      taxaGuilda: 10,
-      guildaRegistrada: null,
-      xpAtivo: false,
-      taxaVendaBau: 10,
-      taxaEmprestimo: 5
-    };
+  static async createConfigEmbed(guildId) {
+    // Buscar do banco de dados em vez de global.guildConfig
+    const dbConfig = await Database.getGuildConfig(guildId);
 
     return new EmbedBuilder()
       .setTitle('⚙️ **PAINEL DE CONFIGURAÇÕES**')
       .setDescription('Configure as opções do bot para este servidor.\n\n*Apenas membros com cargo **ADM** podem alterar estas configurações.*')
       .setColor(0x3498DB)
       .addFields(
-        { 
-          name: '🌐 **Idioma**', 
-          value: `\`${config.idioma}\`\n*(Fixo por enquanto)*`, 
-          inline: true 
+        {
+          name: '🌐 **Idioma**',
+          value: `\`${dbConfig.idioma}\`\n*(Fixo por enquanto)*`,
+          inline: true
         },
-        { 
-          name: '💰 **Taxa da Guilda**', 
-          value: `\`${config.taxaGuilda}%\`\nTaxa em eventos`, 
-          inline: true 
+        {
+          name: '💰 **Taxa da Guilda**',
+          value: `\`${dbConfig.taxaGuilda}%\`\nTaxa em eventos`,
+          inline: true
         },
-        { 
-          name: '🏰 **Guilda Registrada**', 
-          value: config.guildaRegistrada 
-            ? `**${config.guildaRegistrada.nome}**\n🌍 ${config.guildaRegistrada.server}\n✅ Verificada`
-            : '❌ *Nenhuma guilda registrada*', 
-          inline: false 
+        {
+          name: '🏰 **Guilda Registrada**',
+          value: dbConfig.guildaRegistrada
+            ? `**${dbConfig.guildaRegistrada.nome}**\n🌍 ${dbConfig.guildaRegistrada.server}\n✅ Verificada`
+            : '❌ *Nenhuma guilda registrada*',
+          inline: false
         },
-        { 
-          name: '⭐ **Sistema XP**', 
-          value: config.xpAtivo ? '✅ Ativado' : '🔴 Desativado', 
-          inline: true 
+        {
+          name: '⭐ **Sistema XP**',
+          value: dbConfig.xpAtivo ? '✅ Ativado' : '🔴 Desativado',
+          inline: true
         },
-        { 
-          name: '📦 **Taxa Venda Baú**', 
-          value: `\`${config.taxaVendaBau}%\`\n🔴 Inativo`, 
-          inline: true 
+        {
+          name: '📦 **Taxa Venda Baú**',
+          value: `Royal: \`${dbConfig.taxasBau.royal}%\`\nBlack: \`${dbConfig.taxasBau.black}%\`\nBrecilien: \`${dbConfig.taxasBau.brecilien}%\`\nAvalon: \`${dbConfig.taxasBau.avalon}%\``,
+          inline: true
         },
-        { 
-          name: '💳 **Taxa Empréstimo**', 
-          value: `\`${config.taxaEmprestimo}%\`\n🔴 Inativo`, 
-          inline: true 
+        {
+          name: '💳 **Taxa Empréstimo**',
+          value: `\`${dbConfig.taxaEmprestimo}%\`\n${dbConfig.taxaEmprestimo > 0 ? '✅ Ativo' : '🔴 Inativo'}`,
+          inline: true
         }
       )
-      .setFooter({ text: 'Clique nos botões abaixo para configurar' })
+      .setFooter({ text: 'Clique nos botões abaixo para configurar • Dados salvos automaticamente' })
       .setTimestamp();
   }
 
@@ -72,7 +62,7 @@ class ConfigPanel {
           .setCustomId('config_idioma')
           .setLabel('🌐 Idioma')
           .setStyle(ButtonStyle.Secondary)
-          .setDisabled(true), // Fixo por enquanto
+          .setDisabled(true),
         new ButtonBuilder()
           .setCustomId('config_taxa_guilda')
           .setLabel('💰 Taxa Guilda')
@@ -85,19 +75,16 @@ class ConfigPanel {
       new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId('config_xp')
-          .setLabel('⭐ Ativar XP')
-          .setStyle(ButtonStyle.Secondary)
-          .setDisabled(true), // Inativo por enquanto
+          .setLabel('⭐ Ativar/Desativar XP')
+          .setStyle(ButtonStyle.Secondary),
         new ButtonBuilder()
           .setCustomId('config_taxa_bau')
-          .setLabel('📦 Taxa Baú')
-          .setStyle(ButtonStyle.Secondary)
-          .setDisabled(true), // Inativo por enquanto
+          .setLabel('📦 Taxas de Baú')
+          .setStyle(ButtonStyle.Primary),
         new ButtonBuilder()
           .setCustomId('config_taxa_emprestimo')
           .setLabel('💳 Taxa Empréstimo')
-          .setStyle(ButtonStyle.Secondary)
-          .setDisabled(true) // Inativo por enquanto
+          .setStyle(ButtonStyle.Primary)
       ),
       new ActionRowBuilder().addComponents(
         new ButtonBuilder()
@@ -109,60 +96,10 @@ class ConfigPanel {
     ];
   }
 
-  // Select menu para taxa da guilda (0-100%)
-  static createTaxaSelectMenu() {
-    const select = new StringSelectMenuBuilder()
-      .setCustomId('select_taxa_guilda')
-      .setPlaceholder('💰 Selecione a taxa da guilda (0-100%)');
-
-    const options = [];
-    // Adicionar opções de 0 a 100 em steps de 5
-    for (let i = 0; i <= 100; i += 5) {
-      options.push(
-        new StringSelectMenuOptionBuilder()
-          .setLabel(`${i}%`)
-          .setDescription(`Taxa de ${i}% em eventos e divisões`)
-          .setValue(i.toString())
-      );
-    }
-
-    select.addOptions(options);
-    return new ActionRowBuilder().addComponents(select);
-  }
-
-  // Modal para registrar guilda
-  static createGuildRegistrationModal() {
-    const modal = new ModalBuilder()
-      .setCustomId('modal_registrar_guilda')
-      .setTitle('🏰 Registrar Guilda do Servidor');
-
-    const nomeInput = new TextInputBuilder()
-      .setCustomId('guilda_nome')
-      .setLabel('Nome exato da Guilda no Albion')
-      .setPlaceholder('Ex: NoTag, Spike Alliance, etc.')
-      .setStyle(TextInputStyle.Short)
-      .setRequired(true)
-      .setMaxLength(50);
-
-    const serverInput = new TextInputBuilder()
-      .setCustomId('guilda_server')
-      .setLabel('Servidor (americas, europe ou asia)')
-      .setPlaceholder('europe')
-      .setStyle(TextInputStyle.Short)
-      .setRequired(true)
-      .setMaxLength(20);
-
-    const row1 = new ActionRowBuilder().addComponents(nomeInput);
-    const row2 = new ActionRowBuilder().addComponents(serverInput);
-
-    modal.addComponents(row1, row2);
-    return modal;
-  }
-
   // Enviar painel no canal
   static async sendPanel(channel) {
     try {
-      const embed = this.createConfigEmbed(channel.guild.id);
+      const embed = await this.createConfigEmbed(channel.guild.id);
       const buttons = this.createConfigButtons();
 
       await channel.send({
@@ -181,7 +118,7 @@ class ConfigPanel {
   // Atualizar painel existente
   static async updatePanel(message) {
     try {
-      const embed = this.createConfigEmbed(message.guild.id);
+      const embed = await this.createConfigEmbed(message.guild.id);
       const buttons = this.createConfigButtons();
 
       await message.edit({

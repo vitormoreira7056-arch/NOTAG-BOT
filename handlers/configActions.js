@@ -8,6 +8,7 @@ const {
   TextInputStyle,
   PermissionFlagsBits
 } = require('discord.js');
+const Database = require('../utils/database');
 
 class ConfigActions {
   /**
@@ -34,7 +35,6 @@ class ConfigActions {
   // Handler para taxa da guilda
   static async handleTaxaGuilda(interaction) {
     try {
-      // Verificar permissão
       if (!(await this.checkADM(interaction))) return;
 
       const modal = new ModalBuilder()
@@ -63,7 +63,6 @@ class ConfigActions {
 
   static async handleTaxaSelect(interaction) {
     try {
-      // Verificar permissão
       if (!(await this.checkADM(interaction))) return;
 
       const novaTaxa = parseInt(interaction.fields.getTextInputValue('valor_taxa'));
@@ -75,11 +74,15 @@ class ConfigActions {
         });
       }
 
-      // Atualizar configuração
+      // Salvar no banco de dados
+      await Database.updateGuildConfig(interaction.guild.id, {
+        taxaGuilda: novaTaxa
+      });
+
+      // Atualizar também no cache global (para compatibilidade)
       if (!global.guildConfig.has(interaction.guild.id)) {
         global.guildConfig.set(interaction.guild.id, {});
       }
-
       const config = global.guildConfig.get(interaction.guild.id);
       config.taxaGuilda = novaTaxa;
       global.guildConfig.set(interaction.guild.id, config);
@@ -103,11 +106,11 @@ class ConfigActions {
   // Handler para taxa de baú
   static async handleTaxaBau(interaction) {
     try {
-      // Verificar permissão
       if (!(await this.checkADM(interaction))) return;
 
-      const config = global.guildConfig?.get(interaction.guild.id) || {};
-      const taxas = config.taxasBau || {
+      // Buscar do banco de dados
+      const dbConfig = await Database.getGuildConfig(interaction.guild.id);
+      const taxas = dbConfig.taxasBau || {
         royal: 10,
         black: 15,
         brecilien: 12,
@@ -170,7 +173,6 @@ class ConfigActions {
 
   static async processTaxaBau(interaction) {
     try {
-      // Verificar permissão
       if (!(await this.checkADM(interaction))) return;
 
       const royal = parseInt(interaction.fields.getTextInputValue('taxa_royal'));
@@ -185,12 +187,17 @@ class ConfigActions {
         });
       }
 
+      const taxasBau = { royal, black, brecilien, avalon };
+
+      // Salvar no banco de dados
+      await Database.updateGuildConfig(interaction.guild.id, { taxasBau });
+
+      // Atualizar cache global
       if (!global.guildConfig.has(interaction.guild.id)) {
         global.guildConfig.set(interaction.guild.id, {});
       }
-
       const config = global.guildConfig.get(interaction.guild.id);
-      config.taxasBau = { royal, black, brecilien, avalon };
+      config.taxasBau = taxasBau;
       global.guildConfig.set(interaction.guild.id, config);
 
       const embed = new EmbedBuilder()
@@ -223,11 +230,11 @@ class ConfigActions {
   // Handler para taxa de empréstimo
   static async handleTaxaEmprestimo(interaction) {
     try {
-      // Verificar permissão
       if (!(await this.checkADM(interaction))) return;
 
-      const config = global.guildConfig?.get(interaction.guild.id) || {};
-      const taxaAtual = config.taxaEmprestimo || 5;
+      // Buscar do banco de dados
+      const dbConfig = await Database.getGuildConfig(interaction.guild.id);
+      const taxaAtual = dbConfig.taxaEmprestimo || 5;
 
       const modal = new ModalBuilder()
         .setCustomId('modal_taxa_emprestimo')
@@ -255,7 +262,6 @@ class ConfigActions {
 
   static async processTaxaEmprestimo(interaction) {
     try {
-      // Verificar permissão
       if (!(await this.checkADM(interaction))) return;
 
       const taxa = parseInt(interaction.fields.getTextInputValue('valor_taxa_emprestimo'));
@@ -267,10 +273,13 @@ class ConfigActions {
         });
       }
 
+      // Salvar no banco de dados
+      await Database.updateGuildConfig(interaction.guild.id, { taxaEmprestimo: taxa });
+
+      // Atualizar cache global
       if (!global.guildConfig.has(interaction.guild.id)) {
         global.guildConfig.set(interaction.guild.id, {});
       }
-
       const config = global.guildConfig.get(interaction.guild.id);
       config.taxaEmprestimo = taxa;
       global.guildConfig.set(interaction.guild.id, config);
@@ -293,8 +302,11 @@ class ConfigActions {
 
   static async handleRegistrarGuilda(interaction) {
     try {
-      // Verificar permissão
       if (!(await this.checkADM(interaction))) return;
+
+      // Buscar config atual do banco para preencher placeholders
+      const dbConfig = await Database.getGuildConfig(interaction.guild.id);
+      const guildaAtual = dbConfig.guildaRegistrada;
 
       const modal = new ModalBuilder()
         .setCustomId('modal_registrar_guilda')
@@ -303,18 +315,18 @@ class ConfigActions {
       const nomeInput = new TextInputBuilder()
         .setCustomId('nome_guilda')
         .setLabel('Nome da Guilda')
-        .setPlaceholder('Ex: NOTAG')
+        .setPlaceholder(guildaAtual?.nome || 'Ex: NOTAG')
         .setStyle(TextInputStyle.Short)
         .setRequired(true)
         .setMaxLength(50);
 
       const serverInput = new TextInputBuilder()
         .setCustomId('server_guilda')
-        .setLabel('Servidor')
-        .setPlaceholder('Ex: West')
+        .setLabel('Servidor (americas, europe ou asia)')
+        .setPlaceholder(guildaAtual?.server || 'Ex: europe')
         .setStyle(TextInputStyle.Short)
         .setRequired(true)
-        .setMaxLength(50);
+        .setMaxLength(20);
 
       modal.addComponents(
         new ActionRowBuilder().addComponents(nomeInput),
@@ -334,7 +346,6 @@ class ConfigActions {
 
   static async processGuildRegistration(interaction) {
     try {
-      // Verificar permissão
       if (!(await this.checkADM(interaction))) return;
 
       const nome = interaction.fields.getTextInputValue('nome_guilda').trim();
@@ -347,24 +358,41 @@ class ConfigActions {
         });
       }
 
+      // Validar servidor
+      const servidoresValidos = ['americas', 'europe', 'asia'];
+      if (!servidoresValidos.includes(server.toLowerCase())) {
+        return interaction.reply({
+          content: '❌ Servidor inválido! Use: americas, europe ou asia',
+          ephemeral: true
+        });
+      }
+
+      const guildaData = {
+        nome: nome,
+        server: server.toLowerCase(),
+        dataRegistro: Date.now()
+      };
+
+      // Salvar no banco de dados
+      await Database.updateGuildConfig(interaction.guild.id, {
+        guildaRegistrada: guildaData
+      });
+
+      // Atualizar cache global
       if (!global.guildConfig.has(interaction.guild.id)) {
         global.guildConfig.set(interaction.guild.id, {});
       }
-
       const config = global.guildConfig.get(interaction.guild.id);
-      config.guildaRegistrada = {
-        nome: nome,
-        server: server,
-        dataRegistro: Date.now()
-      };
+      config.guildaRegistrada = guildaData;
       global.guildConfig.set(interaction.guild.id, config);
 
       const embed = new EmbedBuilder()
-        .setTitle('✅ GUILDA REGISTRADA')
+        .setTitle('✅ GUILDA REGISTRADA COM SUCESSO')
         .setDescription(
           `**Nome:** ${nome}\n` +
           `**Servidor:** ${server}\n` +
-          `**Registrado em:** ${new Date().toLocaleDateString('pt-BR')}`
+          `**Registrado em:** ${new Date().toLocaleDateString('pt-BR')}\n\n` +
+          `✅ A guilda foi salva no banco de dados e persistirá mesmo após reiniciar o bot!`
         )
         .setColor(0x2ECC71)
         .setTimestamp();
@@ -387,18 +415,26 @@ class ConfigActions {
 
   static async handleXP(interaction) {
     try {
-      // Verificar permissão
       if (!(await this.checkADM(interaction))) return;
 
+      // Buscar do banco de dados
+      const dbConfig = await Database.getGuildConfig(interaction.guild.id);
+      const novoStatus = !dbConfig.xpAtivo;
+
+      // Salvar no banco
+      await Database.updateGuildConfig(interaction.guild.id, {
+        xpAtivo: novoStatus
+      });
+
+      // Atualizar cache global
       if (!global.guildConfig.has(interaction.guild.id)) {
         global.guildConfig.set(interaction.guild.id, {});
       }
-
       const config = global.guildConfig.get(interaction.guild.id);
-      config.xpAtivo = !config.xpAtivo;
+      config.xpAtivo = novoStatus;
       global.guildConfig.set(interaction.guild.id, config);
 
-      const status = config.xpAtivo ? '✅ ATIVADO' : '🔴 DESATIVADO';
+      const status = novoStatus ? '✅ ATIVADO' : '🔴 DESATIVADO';
 
       await interaction.reply({
         content: `Sistema XP ${status}!`,
@@ -416,7 +452,6 @@ class ConfigActions {
 
   static async handleAtualizarBot(interaction) {
     try {
-      // Verificar permissão
       if (!(await this.checkADM(interaction))) return;
 
       const SetupManager = require('./setupManager');

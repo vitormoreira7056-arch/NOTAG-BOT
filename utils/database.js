@@ -175,6 +175,22 @@ class DatabaseManager {
       )
     `);
 
+    // 🎯 TABELA NOVA: Configurações da Guilda
+    await this.db.runAsync(`
+      CREATE TABLE IF NOT EXISTS guild_config (
+        guild_id TEXT PRIMARY KEY,
+        idioma TEXT DEFAULT 'PT-BR',
+        taxa_guilda INTEGER DEFAULT 10,
+        guilda_nome TEXT,
+        guilda_server TEXT,
+        guilda_registrada_em INTEGER,
+        xp_ativo INTEGER DEFAULT 0,
+        taxas_bau TEXT DEFAULT '{"royal": 10, "black": 15, "brecilien": 12, "avalon": 20}',
+        taxa_emprestimo INTEGER DEFAULT 5,
+        updated_at INTEGER DEFAULT (strftime('%s', 'now') * 1000)
+      )
+    `);
+
     // 🎯 TABELA NOVA: Histórico de eventos arquivados
     await this.db.runAsync(`
       CREATE TABLE IF NOT EXISTS event_history (
@@ -193,6 +209,107 @@ class DatabaseManager {
     await this.db.runAsync(`CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(created_at)`);
     await this.db.runAsync(`CREATE INDEX IF NOT EXISTS idx_events_guild ON events(guild_id)`);
     await this.db.runAsync(`CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_logs(user_id)`);
+    await this.db.runAsync(`CREATE INDEX IF NOT EXISTS idx_guild_config ON guild_config(guild_id)`);
+  }
+
+  // ==================== GUILD CONFIG (NOVO) ====================
+
+  async getGuildConfig(guildId) {
+    try {
+      const row = await this.db.getAsync('SELECT * FROM guild_config WHERE guild_id = ?', [guildId]);
+
+      if (!row) {
+        // Cria config padrão
+        await this.db.runAsync(`
+          INSERT INTO guild_config (guild_id, updated_at) VALUES (?, ?)
+        `, [guildId, Date.now()]);
+        return this.getGuildConfig(guildId);
+      }
+
+      return {
+        idioma: row.idioma || 'PT-BR',
+        taxaGuilda: row.taxa_guilda || 10,
+        guildaRegistrada: row.guilda_nome ? {
+          nome: row.guilda_nome,
+          server: row.guilda_server,
+          dataRegistro: row.guilda_registrada_em
+        } : null,
+        xpAtivo: Boolean(row.xp_ativo),
+        taxasBau: JSON.parse(row.taxas_bau || '{"royal": 10, "black": 15, "brecilien": 12, "avalon": 20}'),
+        taxaEmprestimo: row.taxa_emprestimo || 5
+      };
+    } catch (error) {
+      console.error('[Database] Error getting guild config:', error);
+      return {
+        idioma: 'PT-BR',
+        taxaGuilda: 10,
+        guildaRegistrada: null,
+        xpAtivo: false,
+        taxasBau: { royal: 10, black: 15, brecilien: 12, avalon: 20 },
+        taxaEmprestimo: 5
+      };
+    }
+  }
+
+  async updateGuildConfig(guildId, data) {
+    try {
+      const fields = [];
+      const values = [];
+
+      // Mapeamento de campos
+      const fieldMap = {
+        idioma: 'idioma',
+        taxaGuilda: 'taxa_guilda',
+        guildaRegistrada: null,
+        xpAtivo: 'xp_ativo',
+        taxasBau: 'taxas_bau',
+        taxaEmprestimo: 'taxa_emprestimo'
+      };
+
+      // Tratar guildaRegistrada separadamente
+      if (data.guildaRegistrada !== undefined) {
+        if (data.guildaRegistrada === null) {
+          fields.push('guilda_nome = NULL');
+          fields.push('guilda_server = NULL');
+          fields.push('guilda_registrada_em = NULL');
+        } else {
+          fields.push('guilda_nome = ?');
+          fields.push('guilda_server = ?');
+          fields.push('guilda_registrada_em = ?');
+          values.push(data.guildaRegistrada.nome);
+          values.push(data.guildaRegistrada.server);
+          values.push(data.guildaRegistrada.dataRegistro || Date.now());
+        }
+      }
+
+      // Outros campos
+      for (const [key, value] of Object.entries(data)) {
+        if (key === 'guildaRegistrada') continue;
+        const dbField = fieldMap[key];
+        if (!dbField) continue;
+
+        fields.push(`${dbField} = ?`);
+        if (key === 'taxasBau') {
+          values.push(JSON.stringify(value));
+        } else if (key === 'xpAtivo') {
+          values.push(value ? 1 : 0);
+        } else {
+          values.push(value);
+        }
+      }
+
+      fields.push('updated_at = ?');
+      values.push(Date.now());
+      values.push(guildId);
+
+      const sql = `UPDATE guild_config SET ${fields.join(', ')} WHERE guild_id = ?`;
+      await this.db.runAsync(sql, values);
+
+      console.log(`[Database] Guild config updated for ${guildId}`);
+    } catch (error) {
+      console.error('[Database] Error updating guild config:', error);
+      throw error;
+    }
   }
 
   // ==================== USERS ====================
@@ -221,7 +338,7 @@ class DatabaseManager {
       values.push(value);
     });
 
-    values.push(Date.now(), userId); // updated_at e user_id
+    values.push(Date.now(), userId);
 
     const sql = `UPDATE users SET ${fields.join(', ')}, updated_at = ? WHERE user_id = ?`;
     await this.db.runAsync(sql, values);
@@ -341,23 +458,19 @@ class DatabaseManager {
 
   async getGuildDetailedStats(guildId) {
     try {
-      // Saldo geral (soma dos saldos de todos os usuários)
       const saldoGeral = await this.db.getAsync(`
         SELECT SUM(saldo) as total FROM users
       `) || { total: 0 };
 
-      // Arrecadação de taxas (soma de todas as taxas da guilda)
       const taxas = await this.db.getAsync(`
         SELECT SUM(amount) as total FROM transactions
         WHERE guild_id = ? AND (reason = 'taxa_guilda' OR reason LIKE '%taxa%')
       `, [guildId]) || { total: 0 };
 
-      // Empréstimos pendentes (soma dos empréstimos pendentes de todos)
       const emprestimos = await this.db.getAsync(`
         SELECT SUM(emprestimos_pendentes) as total FROM users
       `) || { total: 0 };
 
-      // Total de membros com saldo
       const membrosAtivos = await this.db.getAsync(`
         SELECT COUNT(*) as count FROM users WHERE saldo > 0
       `) || { count: 0 };
@@ -387,7 +500,6 @@ class DatabaseManager {
     try {
       const since = Date.now() - (periodDays * 24 * 60 * 60 * 1000);
 
-      // Busca eventos no período
       const events = await this.db.allAsync(`
         SELECT * FROM events
         WHERE guild_id = ? AND created_at > ?
@@ -421,7 +533,6 @@ class DatabaseManager {
         }
       }
 
-      // Converte para array e ordena
       return Array.from(stats.values())
         .sort((a, b) => b.totalEvents - a.totalEvents);
 
@@ -522,29 +633,6 @@ class DatabaseManager {
     `, [guildId, limit]);
   }
 
-  // 🎯 FUNÇÃO NOVA: Adicionar histórico de evento (para arquivamento)
-  async addEventHistory(historyData) {
-    try {
-      await this.db.runAsync(`
-        INSERT INTO event_history (
-          event_id, simulation_id, guild_id, arquivado_por, timestamp, dados
-        ) VALUES (?, ?, ?, ?, ?, ?)
-      `, [
-        historyData.eventId,
-        historyData.simulationId || null,
-        historyData.guildId,
-        historyData.arquivadoPor,
-        historyData.timestamp,
-        JSON.stringify(historyData.dados || {})
-      ]);
-      console.log(`[Database] Event history added: ${historyData.eventId}`);
-      return true;
-    } catch (error) {
-      console.error('[Database] Error adding event history:', error);
-      return false;
-    }
-  }
-
   // ==================== DAILY CHECKINS ====================
 
   async recordCheckin(userId, guildId, rewards) {
@@ -558,7 +646,6 @@ class DatabaseManager {
         reward_saldo = excluded.reward_saldo
     `, [userId, guildId, today, rewards.xp, rewards.saldo, rewards.streak]);
 
-    // Atualiza streak no usuário
     await this.updateUser(userId, {
       streak_diaria: rewards.streak,
       ultimo_checkin: Date.now()

@@ -12,7 +12,7 @@ const {
 const fs = require('fs');
 require('dotenv').config();
 
-// Importar Handlers
+// ==================== IMPORTAR HANDLERS ====================
 const RegistrationModal = require('./handlers/registrationModal');
 const RegistrationActions = require('./handlers/registrationActions');
 const ConfigActions = require('./handlers/configActions');
@@ -46,7 +46,7 @@ const client = new Client({
 // Coleção de comandos
 client.commands = new Collection();
 
-// Importar Comandos
+// ==================== IMPORTAR COMANDOS ====================
 const instalarCommand = require('./commands/instalar');
 const desistalarCommand = require('./commands/desistalar');
 const atualizarCommand = require('./commands/atualizar');
@@ -62,7 +62,7 @@ client.commands.set(limparEventosCommand.data.name, limparEventosCommand);
 client.commands.set(limparSaldoCommand.data.name, limparSaldoCommand);
 client.commands.set(limparXpCommand.data.name, limparXpCommand);
 
-// Inicializar variáveis globais
+// ==================== INICIALIZAR VARIÁVEIS GLOBAIS ====================
 global.registrosPendentes = new Map();
 global.registroTemp = new Map();
 global.guildConfig = new Map();
@@ -75,6 +75,7 @@ global.pendingWithdrawals = new Map();
 global.pendingLoans = new Map();
 global.pendingTransfers = new Map();
 global.pendingOrbDeposits = new Map();
+global.activeXpEvents = new Map();
 global.client = client;
 
 // Carregar dados persistidos (blacklist e histórico)
@@ -98,7 +99,7 @@ try {
   console.error('❌ Erro ao carregar dados persistidos:', error);
 }
 
-// Evento Ready
+// ==================== EVENTO READY ====================
 client.once(Events.ClientReady, async () => {
   console.log(`✅ Bot logado como ${client.user.tag}`);
   console.log(`🤖 ID do Bot: ${client.user.id}`);
@@ -221,7 +222,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   }
 });
 
-// Handler Principal de Interações
+// ==================== HANDLER PRINCIPAL DE INTERAÇÕES ====================
 client.on(Events.InteractionCreate, async interaction => {
   try {
     // ==================== COMANDOS SLASH ====================
@@ -587,11 +588,53 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // LISTA DE MEMBROS
+      // LISTA DE MEMBROS (PAINEL ANTIGO - manter compatibilidade)
       if (customId === 'btn_atualizar_lista_membros') {
         await interaction.deferUpdate();
         const MemberListPanel = require('./handlers/memberListPanel');
         await MemberListPanel.updatePanel(interaction.message, interaction.guild);
+        return;
+      }
+
+      // PAINEL DE LISTA DE MEMBROS (NOVOS HANDLERS)
+      if (customId === 'btn_mlist_atualizar') {
+        const MemberListPanel = require('./handlers/memberListPanel');
+        await MemberListPanel.handleAtualizar(interaction);
+        return;
+      }
+
+      if (customId === 'btn_mlist_ver_lista') {
+        const MemberListPanel = require('./handlers/memberListPanel');
+        const members = Array.from((await interaction.guild.members.fetch()).values());
+        await MemberListPanel.showMemberPage(interaction, members, 1, Math.ceil(members.length/10), 'all');
+        return;
+      }
+
+      if (customId.startsWith('btn_mlist_page_')) {
+        const MemberListPanel = require('./handlers/memberListPanel');
+        if (customId.includes('next')) {
+          await MemberListPanel.handlePageNavigation(interaction, 'next');
+        } else if (customId.includes('prev')) {
+          await MemberListPanel.handlePageNavigation(interaction, 'prev');
+        }
+        return;
+      }
+
+      if (customId === 'btn_mlist_voltar_resumo') {
+        const MemberListPanel = require('./handlers/memberListPanel');
+        await MemberListPanel.handleVoltarResumo(interaction);
+        return;
+      }
+
+      if (customId === 'btn_mlist_stats') {
+        const MemberListPanel = require('./handlers/memberListPanel');
+        await MemberListPanel.handleStatsDetailed(interaction);
+        return;
+      }
+
+      if (customId === 'btn_mlist_export') {
+        const MemberListPanel = require('./handlers/memberListPanel');
+        await MemberListPanel.handleExport(interaction);
         return;
       }
 
@@ -652,6 +695,7 @@ client.on(Events.InteractionCreate, async interaction => {
 
     // ==================== SELECT MENUS ====================
     if (interaction.isStringSelectMenu()) {
+      // REGISTRO
       if (interaction.customId === 'select_server_registro') {
         await RegistrationModal.processServerSelect(interaction);
         return;
@@ -662,6 +706,7 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
+      // CONFIGURAÇÕES
       if (interaction.customId === 'select_taxa_guilda') {
         await ConfigActions.handleTaxaSelect(interaction);
         return;
@@ -686,6 +731,19 @@ client.on(Events.InteractionCreate, async interaction => {
       if (interaction.customId === 'select_cargo_eventos') {
         const EventStatsHandler = require('./handlers/eventStatsHandler');
         await EventStatsHandler.handleRoleSelect(interaction);
+        return;
+      }
+
+      // PAINEL LISTA DE MEMBROS - FILTROS
+      if (interaction.customId === 'mlist_filter_cargo') {
+        const MemberListPanel = require('./handlers/memberListPanel');
+        await MemberListPanel.handleFilterSelect(interaction);
+        return;
+      }
+
+      if (interaction.customId === 'mlist_sort_by') {
+        const MemberListPanel = require('./handlers/memberListPanel');
+        await MemberListPanel.handleSortSelect(interaction);
         return;
       }
     }
@@ -845,13 +903,12 @@ client.on(Events.InteractionCreate, async interaction => {
   }
 });
 
-// Evento: Membro sai do servidor
+// ==================== EVENTO: MEMBRO SAI DO SERVIDOR ====================
 client.on(Events.GuildMemberRemove, async (member) => {
   await GuildMemberRemoveHandler.handle(member);
 });
 
 // ==================== HANDLERS DE ERROS ====================
-
 process.on('unhandledRejection', error => {
   console.error('❌ Unhandled promise rejection:', error);
 });
@@ -895,7 +952,7 @@ process.on('SIGTERM', async () => {
   process.exit();
 });
 
-// Login do Bot
+// ==================== LOGIN DO BOT ====================
 client.login(process.env.TOKEN).then(() => {
   console.log('🔐 Login realizado com sucesso');
 }).catch(error => {
