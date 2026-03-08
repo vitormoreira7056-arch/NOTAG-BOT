@@ -42,7 +42,6 @@ class RegistrationModal {
       .setRequired(true)
       .setMaxLength(200);
 
-    // NOVO CAMPO: Quem te convidou
     const convidadoPorInput = new TextInputBuilder()
       .setCustomId('reg_convidado_por')
       .setLabel('👥 Quem te convidou? (Opcional)')
@@ -117,10 +116,8 @@ class RegistrationModal {
       const nick = interaction.fields.getTextInputValue('reg_nick').trim();
       const guilda = interaction.fields.getTextInputValue('reg_guilda').trim();
       const arma = interaction.fields.getTextInputValue('reg_arma').trim();
-      // NOVO: Capturar quem convidou
       const convidadoPor = interaction.fields.getTextInputValue('reg_convidado_por')?.trim() || null;
 
-      // Verificar se usuário está na blacklist
       const RegistrationActions = require('./registrationActions');
       const blacklistCheck = RegistrationActions.checkBlacklist(nick, interaction.user.id);
       if (blacklistCheck.isBlacklisted) {
@@ -130,12 +127,11 @@ class RegistrationModal {
         });
       }
 
-      // 🎯 CORREÇÃO: Verificar se usuário já tem registro pendente pelo userId
+      // 🎯 CORREÇÃO: Verificar se existe registro pendente deste usuário (buscando por userId)
       if (!global.registrosPendentes) global.registrosPendentes = new Map();
 
-      // Verificar se existe algum registro pendente deste usuário
-      const registroExistente = Array.from(global.registrosPendentes.values()).find(
-        r => r.userId === interaction.user.id
+      const registroExistente = Array.from(global.registrosPendentes.entries()).find(
+        ([id, reg]) => reg.userId === interaction.user.id
       );
 
       if (registroExistente) {
@@ -150,7 +146,7 @@ class RegistrationModal {
         nick,
         guilda,
         arma,
-        convidadoPor, // Salvar na temp
+        convidadoPor,
         etapa: 'selecionar_servidor'
       });
 
@@ -256,35 +252,39 @@ class RegistrationModal {
         console.log(`📝 Permitindo registro mesmo assim (modo offline)`);
       }
 
-      // Verificar histórico de recusas
       const RegistrationActions = require('./registrationActions');
       const historico = RegistrationActions.getHistoricoRecusas(interaction.user.id, nick);
       const tentativasAnteriores = historico.length;
 
       const registroId = `reg_${Date.now()}_${interaction.user.id}`;
+
+      // 🎯 CORREÇÃO: Estrutura dos dados compatível com registrationActions
+      // Os dados ficam dentro de 'dados' para manter compatibilidade
       const registroData = {
         id: registroId,
         userId: interaction.user.id,
         userTag: interaction.user.tag,
-        nick: nick,
-        nickDoJogo: nick,
-        guilda: guilda,
-        server: server,
-        platform: platform,
-        arma: arma,
-        convidadoPor: convidadoPor, // Salvar no registro
+        dados: {  // 🎯 Estrutura aninhada esperada pelo registrationActions
+          nick: nick,
+          nickDoJogo: nick,
+          guilda: guilda,
+          server: server,
+          platform: platform,
+          arma: arma,
+          convidadoPor: convidadoPor
+        },
         albionData: verification.details || null,
         apiVerified: apiVerified,
         apiError: apiError || !apiVerified,
         status: 'pendente',
-        tentativasAnteriores: tentativasAnteriores, // NOVO: Contador
-        historicoRecusas: historico, // NOVO: Histórico completo
+        tentativasAnteriores: tentativasAnteriores,
+        historicoRecusas: historico,
         timestamp: Date.now()
       };
 
       if (!global.registrosPendentes) global.registrosPendentes = new Map();
 
-      // 🎯 CORREÇÃO: Salvar usando registroId como chave, não userId
+      // 🎯 CORREÇÃO: Usar registroId como chave para compatibilidade com botões
       global.registrosPendentes.set(registroId, registroData);
 
       global.registroTemp.delete(interaction.user.id);
@@ -298,7 +298,6 @@ class RegistrationModal {
         mensagemSucesso = '⚠️ Registro enviado para análise!\n\n_Note: Não foi possível verificar automaticamente na API do Albion. A staff irá analisar manualmente._';
       }
 
-      // Adicionar aviso se houver tentativas anteriores
       if (tentativasAnteriores > 0) {
         mensagemSucesso += `\n\n⚠️ **Atenção:** Esta é sua tentativa **#${tentativasAnteriores + 1}** de registro.`;
       }
@@ -316,7 +315,6 @@ class RegistrationModal {
         .setColor(apiVerified ? 0x2ECC71 : 0xF39C12)
         .setFooter({ text: 'Você receberá uma DM quando for analisado' });
 
-      // Adicionar campo de convidado se existir
       if (convidadoPor) {
         successEmbed.addFields({
           name: '👥 Convidado por',
@@ -357,6 +355,9 @@ class RegistrationModal {
         'asia': '🌏'
       };
 
+      // 🎯 CORREÇÃO: Acessar dados através de registroData.dados
+      const dados = registroData.dados;
+
       const embed = new EmbedBuilder()
         .setTitle('📝 Nova Solicitação de Registro')
         .setDescription(`Registro de ${interaction.user}`)
@@ -364,25 +365,23 @@ class RegistrationModal {
         .setThumbnail(interaction.user.displayAvatarURL({ dynamic: true }))
         .addFields(
           { name: '👤 Usuário Discord', value: `${interaction.user} (\`${interaction.user.id}\`)`, inline: false },
-          { name: '🎮 Nick no Albion', value: `\`${registroData.nick}\``, inline: true },
-          { name: '🏰 Guilda Informada', value: registroData.guilda || 'Nenhuma', inline: true },
-          { name: '🌍 Servidor', value: `${serverEmoji[registroData.server]} ${registroData.server.toUpperCase()}`, inline: true },
-          { name: '💻 Plataforma', value: registroData.platform, inline: true },
-          { name: '⚔️ Arma/Spec', value: registroData.arma, inline: false }
+          { name: '🎮 Nick no Albion', value: `\`${dados.nick}\``, inline: true },
+          { name: '🏰 Guilda Informada', value: dados.guilda || 'Nenhuma', inline: true },
+          { name: '🌍 Servidor', value: `${serverEmoji[dados.server]} ${dados.server.toUpperCase()}`, inline: true },
+          { name: '💻 Plataforma', value: dados.platform, inline: true },
+          { name: '⚔️ Arma/Spec', value: dados.arma, inline: false }
         )
         .setFooter({ text: `ID: ${registroData.id} | ${registroData.apiVerified ? '✅ Verificado via API' : '⚠️ NÃO verificado na API'}` })
         .setTimestamp();
 
-      // Adicionar campo de convidado se existir
-      if (registroData.convidadoPor) {
+      if (dados.convidadoPor) {
         embed.addFields({
           name: '👥 Convidado por',
-          value: registroData.convidadoPor,
+          value: dados.convidadoPor,
           inline: true
         });
       }
 
-      // Mostrar histórico de recusas se houver
       if (registroData.tentativasAnteriores > 0) {
         const ultimasRecusas = registroData.historicoRecusas.slice(-3).map((h, i) =>
           `${i + 1}. ${h.motivo} (${new Date(h.data).toLocaleDateString()})`
@@ -394,7 +393,7 @@ class RegistrationModal {
           inline: false
         });
 
-        embed.setColor(0xE74C3C); // Vermelho se tiver histórico de recusas
+        embed.setColor(0xE74C3C);
       }
 
       if (registroData.albionData && registroData.apiVerified) {
@@ -430,7 +429,6 @@ class RegistrationModal {
           .setStyle(ButtonStyle.Danger)
       );
 
-      // Adicionar botão de blacklist se for recusa e tiver muitas tentativas
       const row2 = new ActionRowBuilder();
       if (registroData.tentativasAnteriores >= 2) {
         row2.addComponents(
@@ -444,16 +442,22 @@ class RegistrationModal {
       const components = [row1];
       if (row2.components.length > 0) components.push(row2);
 
+      const recrutadorRole = guild.roles.cache.find(r => r.name === 'Recrutador');
+      const admRole = guild.roles.cache.find(r => r.name === 'ADM');
+
+      const recrutadorMention = recrutadorRole ? `<@&${recrutadorRole.id}>` : '@Recrutador';
+      const admMention = admRole ? `<@&${admRole.id}>` : '@ADM';
+
       const msg = await canalSolicitacao.send({
-        content: `📢 <@&${guild.roles.cache.find(r => r.name === 'Recrutador')?.id}> <@&${guild.roles.cache.find(r => r.name === 'ADM')?.id}> Nova solicitação de registro!`,
+        content: `📢 ${recrutadorMention} ${admMention} Nova solicitação de registro!`,
         embeds: [embed],
         components: components
       });
 
-      // 🎯 CORREÇÃO: Atualizar o registro com os dados da mensagem
       registroData.messageId = msg.id;
       registroData.channelId = msg.channel.id;
-      // Salvar novamente para garantir que está atualizado
+
+      // 🎯 CORREÇÃO: Atualizar o registro no Map com os dados da mensagem
       global.registrosPendentes.set(registroData.id, registroData);
 
     } catch (error) {
