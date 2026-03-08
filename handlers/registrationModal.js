@@ -130,7 +130,15 @@ class RegistrationModal {
         });
       }
 
-      if (global.registrosPendentes?.has(interaction.user.id)) {
+      // 🎯 CORREÇÃO: Verificar se usuário já tem registro pendente pelo userId
+      if (!global.registrosPendentes) global.registrosPendentes = new Map();
+
+      // Verificar se existe algum registro pendente deste usuário
+      const registroExistente = Array.from(global.registrosPendentes.values()).find(
+        r => r.userId === interaction.user.id
+      );
+
+      if (registroExistente) {
         return await interaction.editReply({
           content: '❌ Você já tem um registro pendente! Aguarde a análise da staff.'
         });
@@ -275,7 +283,9 @@ class RegistrationModal {
       };
 
       if (!global.registrosPendentes) global.registrosPendentes = new Map();
-      global.registrosPendentes.set(interaction.user.id, registroData);
+
+      // 🎯 CORREÇÃO: Salvar usando registroId como chave, não userId
+      global.registrosPendentes.set(registroId, registroData);
 
       global.registroTemp.delete(interaction.user.id);
 
@@ -308,10 +318,10 @@ class RegistrationModal {
 
       // Adicionar campo de convidado se existir
       if (convidadoPor) {
-        successEmbed.addFields({ 
-          name: '👥 Convidado por', 
-          value: convidadoPor, 
-          inline: false 
+        successEmbed.addFields({
+          name: '👥 Convidado por',
+          value: convidadoPor,
+          inline: false
         });
       }
 
@@ -365,16 +375,16 @@ class RegistrationModal {
 
       // Adicionar campo de convidado se existir
       if (registroData.convidadoPor) {
-        embed.addFields({ 
-          name: '👥 Convidado por', 
-          value: registroData.convidadoPor, 
-          inline: true 
+        embed.addFields({
+          name: '👥 Convidado por',
+          value: registroData.convidadoPor,
+          inline: true
         });
       }
 
       // Mostrar histórico de recusas se houver
       if (registroData.tentativasAnteriores > 0) {
-        const ultimasRecusas = registroData.historicoRecusas.slice(-3).map((h, i) => 
+        const ultimasRecusas = registroData.historicoRecusas.slice(-3).map((h, i) =>
           `${i + 1}. ${h.motivo} (${new Date(h.data).toLocaleDateString()})`
         ).join('\n');
 
@@ -440,9 +450,11 @@ class RegistrationModal {
         components: components
       });
 
+      // 🎯 CORREÇÃO: Atualizar o registro com os dados da mensagem
       registroData.messageId = msg.id;
       registroData.channelId = msg.channel.id;
-      global.registrosPendentes.set(registroData.userId, registroData);
+      // Salvar novamente para garantir que está atualizado
+      global.registrosPendentes.set(registroData.id, registroData);
 
     } catch (error) {
       console.error('Erro ao enviar para canal de aprovação:', error);

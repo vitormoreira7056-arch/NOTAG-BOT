@@ -118,7 +118,8 @@ class RegistrationActions {
         });
       }
 
-      const { userId, dados } = registro;
+      // 🎯 CORREÇÃO: Acessar propriedades diretamente, não via dados
+      const { userId, nick, guilda } = registro;
       const membro = await interaction.guild.members.fetch(userId).catch(() => null);
 
       if (!membro) {
@@ -135,7 +136,7 @@ class RegistrationActions {
       }
 
       // Atualizar apelido para o nick do registro
-      await membro.setNickname(dados.nick);
+      await membro.setNickname(nick);
 
       // Salvar no histórico
       if (!global.historicoRegistros.has(userId)) {
@@ -143,7 +144,7 @@ class RegistrationActions {
       }
       global.historicoRegistros.get(userId).push({
         tipo: 'membro',
-        dados: dados,
+        dados: registro, // Salvar todo o registro
         aprovadoPor: interaction.user.id,
         data: Date.now()
       });
@@ -156,10 +157,10 @@ class RegistrationActions {
         .setTitle('✅ REGISTRO APROVADO!')
         .setDescription(
           `🎉 **Parabéns!** Seu registro foi aprovado com sucesso!\n\n` +
-          `\> **Nick:** \`${dados.nick}\`\n` +
-          `\> **Guilda:** \`${dados.guilda}\`\n` +
-          `\> **Plataforma:** \`${dados.plataforma}\`\n` +
-          `\> **Arma:** \`${dados.arma}\`\n` +
+          `\> **Nick:** \`${nick}\`\n` +
+          `\> **Guilda:** \`${guilda}\`\n` +
+          `\> **Plataforma:** \`${registro.platform}\`\n` +
+          `\> **Arma:** \`${registro.arma}\`\n` +
           `\> **Cargo:** ⚔️ **Membro**\n` +
           `\> **Aprovado por:** \`${interaction.user.tag}\`\n` +
           `\> **Data:** ${new Date().toLocaleString('pt-BR')}\n\n` +
@@ -180,11 +181,11 @@ class RegistrationActions {
 
       // Atualizar mensagem original
       await interaction.update({
-        content: `✅ Registro aprovado! ${dados.nick} agora é Membro.`,
+        content: `✅ Registro aprovado! ${nick} agora é Membro.`,
         components: []
       });
 
-      console.log(`[Registration] Member approved: ${dados.nick}`);
+      console.log(`[Registration] Member approved: ${nick}`);
 
     } catch (error) {
       console.error(`[Registration] Error approving member:`, error);
@@ -207,7 +208,8 @@ class RegistrationActions {
         });
       }
 
-      const { userId, dados } = registro;
+      // 🎯 CORREÇÃO: Acessar propriedades diretamente
+      const { userId, nick, guilda } = registro;
       const membro = await interaction.guild.members.fetch(userId).catch(() => null);
 
       if (!membro) {
@@ -224,7 +226,7 @@ class RegistrationActions {
       }
 
       // Atualizar apelido para o nick do registro
-      await membro.setNickname(dados.nick);
+      await membro.setNickname(nick);
 
       // Salvar no histórico
       if (!global.historicoRegistros.has(userId)) {
@@ -232,7 +234,7 @@ class RegistrationActions {
       }
       global.historicoRegistros.get(userId).push({
         tipo: 'alianca',
-        dados: dados,
+        dados: registro,
         aprovadoPor: interaction.user.id,
         data: Date.now()
       });
@@ -245,10 +247,10 @@ class RegistrationActions {
         .setTitle('✅ REGISTRO APROVADO!')
         .setDescription(
           `🎉 **Parabéns!** Seu registro foi aprovado como Aliança!\n\n` +
-          `\> **Nick:** \`${dados.nick}\`\n` +
-          `\> **Guilda:** \`${dados.guilda}\`\n` +
-          `\> **Plataforma:** \`${dados.plataforma}\`\n` +
-          `\> **Arma:** \`${dados.arma}\`\n` +
+          `\> **Nick:** \`${nick}\`\n` +
+          `\> **Guilda:** \`${guilda}\`\n` +
+          `\> **Plataforma:** \`${registro.platform}\`\n` +
+          `\> **Arma:** \`${registro.arma}\`\n` +
           `\> **Cargo:** 🤝 **Aliança**\n` +
           `\> **Aprovado por:** \`${interaction.user.tag}\`\n` +
           `\> **Data:** ${new Date().toLocaleString('pt-BR')}\n\n` +
@@ -268,11 +270,11 @@ class RegistrationActions {
       }
 
       await interaction.update({
-        content: `✅ Registro aprovado! ${dados.nick} agora é Aliança.`,
+        content: `✅ Registro aprovado! ${nick} agora é Aliança.`,
         components: []
       });
 
-      console.log(`[Registration] Alliance approved: ${dados.nick}`);
+      console.log(`[Registration] Alliance approved: ${nick}`);
 
     } catch (error) {
       console.error(`[Registration] Error approving alliance:`, error);
@@ -295,7 +297,8 @@ class RegistrationActions {
         });
       }
 
-      const { userId, dados } = registro;
+      // 🎯 CORREÇÃO: Acessar propriedades diretamente
+      const { userId, nick, guilda } = registro;
       const membro = await interaction.guild.members.fetch(userId).catch(() => null);
 
       if (!membro) {
@@ -312,7 +315,7 @@ class RegistrationActions {
       }
 
       // Atualizar apelido para o nick do registro
-      await membro.setNickname(dados.nick);
+      await membro.setNickname(nick);
 
       // Salvar no histórico
       if (!global.historicoRegistros.has(userId)) {
@@ -320,7 +323,7 @@ class RegistrationActions {
       }
       global.historicoRegistros.get(userId).push({
         tipo: 'convidado',
-        dados: dados,
+        dados: registro,
         aprovadoPor: interaction.user.id,
         data: Date.now()
       });
@@ -333,10 +336,10 @@ class RegistrationActions {
         .setTitle('✅ REGISTRO APROVADO!')
         .setDescription(
           `🎉 **Parabéns!** Seu registro foi aprovado!\n\n` +
-          `\> **Nick:** \`${dados.nick}\`\n` +
-          `\> **Guilda:** \`${dados.guilda}\`\n` +
-          `\> **Plataforma:** \`${dados.plataforma}\`\n` +
-          `\> **Arma:** \`${dados.arma}\`\n` +
+          `\> **Nick:** \`${nick}\`\n` +
+          `\> **Guilda:** \`${guilda}\`\n` +
+          `\> **Plataforma:** \`${registro.platform}\`\n` +
+          `\> **Arma:** \`${registro.arma}\`\n` +
           `\> **Cargo:** 🎫 **Convidado**\n` +
           `\> **Aprovado por:** \`${interaction.user.tag}\`\n` +
           `\> **Data:** ${new Date().toLocaleString('pt-BR')}\n\n` +
@@ -356,11 +359,11 @@ class RegistrationActions {
       }
 
       await interaction.update({
-        content: `✅ Registro aprovado! ${dados.nick} agora é Convidado.`,
+        content: `✅ Registro aprovado! ${nick} agora é Convidado.`,
         components: []
       });
 
-      console.log(`[Registration] Guest approved: ${dados.nick}`);
+      console.log(`[Registration] Guest approved: ${nick}`);
 
     } catch (error) {
       console.error(`[Registration] Error approving guest:`, error);
@@ -415,7 +418,8 @@ class RegistrationActions {
         });
       }
 
-      const { userId, dados } = registro;
+      // 🎯 CORREÇÃO: Acessar propriedades diretamente do registro
+      const { userId, nick, guilda } = registro;
       const membro = await interaction.guild.members.fetch(userId).catch(() => null);
 
       // Salvar no histórico como recusado
@@ -426,7 +430,7 @@ class RegistrationActions {
         tipo: 'recusado',
         status: 'recusado',
         motivo: motivo,
-        dados: dados,
+        dados: registro,
         recusadoPor: interaction.user.id,
         data: Date.now()
       });
@@ -439,7 +443,7 @@ class RegistrationActions {
         .setTitle('❌ REGISTRO RECUSADO')
         .setDescription(
           `⚠️ **Seu registro foi recusado.**\n\n` +
-          `\> **Nick:** \`${dados.nick}\`\n` +
+          `\> **Nick:** \`${nick}\`\n` +
           `\> **Motivo:** \`\`\`${motivo}\`\`\`\n` +
           `\> **Recusado por:** \`${interaction.user.tag}\`\n` +
           `\> **Data:** ${new Date().toLocaleString('pt-BR')}\n\n` +
@@ -454,28 +458,30 @@ class RegistrationActions {
         })
         .setTimestamp();
 
-      try {
-        await membro.send({ embeds: [embedRecusa] });
-      } catch (e) {
-        console.log(`[Registration] Could not DM user ${userId}`);
+      if (membro) {
+        try {
+          await membro.send({ embeds: [embedRecusa] });
+        } catch (e) {
+          console.log(`[Registration] Could not DM user ${userId}`);
+        }
       }
 
       await interaction.reply({
-        content: `❌ Registro de ${dados.nick} recusado. Motivo enviado no privado.`,
+        content: `❌ Registro de ${nick} recusado. Motivo enviado no privado.`,
         ephemeral: true
       });
 
       // Atualizar mensagem original se possível
       try {
         await interaction.message?.edit({
-          content: `❌ **REGISTRO RECUSADO**\n**Nick:** ${dados.nick}\n**Motivo:** ${motivo}\n**Por:** ${interaction.user.tag}`,
+          content: `❌ **REGISTRO RECUSADO**\n**Nick:** ${nick}\n**Motivo:** ${motivo}\n**Por:** ${interaction.user.tag}`,
           components: []
         });
       } catch (e) {
         console.log('[Registration] Could not edit original message');
       }
 
-      console.log(`[Registration] Registration rejected: ${dados.nick}`);
+      console.log(`[Registration] Registration rejected: ${nick}`);
 
     } catch (error) {
       console.error(`[Registration] Error processing rejection:`, error);
@@ -498,12 +504,13 @@ class RegistrationActions {
         });
       }
 
-      const { userId, dados } = registro;
+      // 🎯 CORREÇÃO: Acessar propriedades diretamente
+      const { userId, nick, guilda } = registro;
 
       // Adicionar à blacklist
       global.blacklist.set(userId, {
-        nick: dados.nick,
-        guilda: dados.guilda,
+        nick: nick,
+        guilda: guilda,
         data: Date.now(),
         adicionadoPor: interaction.user.id
       });
@@ -516,8 +523,8 @@ class RegistrationActions {
         .setTitle('🚫 BANIDO DO SERVIDOR')
         .setDescription(
           `⚠️ **Você foi adicionado à blacklist!**\n\n` +
-          `\> **Nick:** \`${dados.nick}\`\n` +
-          `\> **Guilda:** \`${dados.guilda}\`\n` +
+          `\> **Nick:** \`${nick}\`\n` +
+          `\> **Guilda:** \`${guilda}\`\n` +
           `\> **Adicionado por:** \`${interaction.user.tag}\`\n` +
           `\> **Data:** ${new Date().toLocaleString('pt-BR')}\n\n` +
           `🚫 **Você não pode mais se registrar neste servidor.**\n\n` +
@@ -546,7 +553,7 @@ class RegistrationActions {
       }
 
       await interaction.update({
-        content: `🚫 ${dados.nick} adicionado à blacklist e removido do servidor.`,
+        content: `🚫 ${nick} adicionado à blacklist e removido do servidor.`,
         components: []
       });
 
@@ -557,7 +564,7 @@ class RegistrationActions {
       }
       fs.writeFileSync('./data/blacklist.json', JSON.stringify([...global.blacklist], null, 2));
 
-      console.log(`[Registration] User blacklisted: ${dados.nick}`);
+      console.log(`[Registration] User blacklisted: ${nick}`);
 
     } catch (error) {
       console.error(`[Registration] Error adding to blacklist:`, error);
