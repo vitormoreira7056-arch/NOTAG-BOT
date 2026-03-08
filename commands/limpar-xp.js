@@ -58,7 +58,7 @@ module.exports = {
 
       // Criar collector para a confirmação
       const collector = interaction.channel.createMessageComponentCollector({
-        filter: i => i.user.id === ownerId && 
+        filter: i => i.user.id === ownerId &&
           (i.customId === 'confirmar_limpar_xp' || i.customId === 'cancelar_limpar_xp'),
         time: 30000,
         max: 1
@@ -69,17 +69,22 @@ module.exports = {
           await i.deferUpdate();
 
           try {
-            const users = Database.getAllUsers();
+            // Buscar todos os usuários
+            const users = await Database.db.allAsync('SELECT * FROM users') || [];
             let count = 0;
 
             // Resetar XP de todos os usuários
             for (const user of users) {
-              user.level = 1;
-              user.xp = 0;
-              user.totalXp = 0;
-              user.insignias = [];
-              user.eventosParticipados = 0;
-              Database.updateUser(user.userId, user);
+              await Database.db.runAsync(`
+                UPDATE users SET 
+                  level = 1,
+                  xp = 0,
+                  total_xp = 0,
+                  insignias = '[]',
+                  eventos_participados = 0,
+                  updated_at = ?
+                WHERE user_id = ?
+              `, [Date.now(), user.user_id]);
               count++;
             }
 

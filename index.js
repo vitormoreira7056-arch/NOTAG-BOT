@@ -50,11 +50,17 @@ client.commands = new Collection();
 const instalarCommand = require('./commands/instalar');
 const desistalarCommand = require('./commands/desistalar');
 const atualizarCommand = require('./commands/atualizar');
+const limparEventosCommand = require('./commands/limpar-eventos');
+const limparSaldoCommand = require('./commands/limpar-saldo');
+const limparXpCommand = require('./commands/limpar-xp');
 
 // Registrar comandos na coleção
 client.commands.set(instalarCommand.data.name, instalarCommand);
 client.commands.set(desistalarCommand.data.name, desistalarCommand);
 client.commands.set(atualizarCommand.data.name, atualizarCommand);
+client.commands.set(limparEventosCommand.data.name, limparEventosCommand);
+client.commands.set(limparSaldoCommand.data.name, limparSaldoCommand);
+client.commands.set(limparXpCommand.data.name, limparXpCommand);
 
 // Inicializar variáveis globais
 global.registrosPendentes = new Map();
@@ -108,7 +114,10 @@ client.once(Events.ClientReady, async () => {
   const commands = [
     instalarCommand.data.toJSON(),
     desistalarCommand.data.toJSON(),
-    atualizarCommand.data.toJSON()
+    atualizarCommand.data.toJSON(),
+    limparEventosCommand.data.toJSON(),
+    limparSaldoCommand.data.toJSON(),
+    limparXpCommand.data.toJSON()
   ];
 
   const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
@@ -261,6 +270,13 @@ client.on(Events.InteractionCreate, async interaction => {
     if (interaction.isButton()) {
       const customId = interaction.customId;
 
+      // COMANDOS DE LIMPAR - Confirmações (são tratados pelos collectors dos comandos)
+      if (customId === 'confirmar_limpar_eventos' || customId === 'cancelar_limpar_eventos' ||
+          customId === 'confirmar_limpar_saldo' || customId === 'cancelar_limpar_saldo' ||
+          customId === 'confirmar_limpar_xp' || customId === 'cancelar_limpar_xp') {
+        return; // Ignorar aqui, o collector do comando vai processar
+      }
+
       // SISTEMA DE REGISTRO
       if (customId === 'btn_abrir_registro') {
         const modal = RegistrationModal.createRegistrationModal();
@@ -400,6 +416,21 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
+      if (customId.startsWith('loot_arquivar_')) {
+        const simulationId = customId.replace('loot_arquivar_', '');
+        const simulation = global.simulations?.get(simulationId);
+
+        if (simulation) {
+          await LootSplitHandler.handleArquivar(interaction, simulation.eventId, simulationId);
+        } else {
+          await interaction.reply({
+            content: '❌ Simulação não encontrada!',
+            ephemeral: true
+          });
+        }
+        return;
+      }
+
       // SISTEMA DE DEPÓSITO
       if (customId === 'btn_deposito_novo') {
         await DepositHandler.handleDepositoButton(interaction);
@@ -452,6 +483,15 @@ client.on(Events.InteractionCreate, async interaction => {
         }
 
         await DepositHandler.handleAprovacao(interaction, depositId, null, null, false);
+        return;
+      }
+
+      if (customId.startsWith('dep_verificar_')) {
+        const comprovante = customId.replace('dep_verificar_', '');
+        await interaction.reply({
+          content: `📎 **Comprovante:** ${comprovante}`,
+          ephemeral: true
+        });
         return;
       }
 
@@ -554,6 +594,60 @@ client.on(Events.InteractionCreate, async interaction => {
         await MemberListPanel.updatePanel(interaction.message, interaction.guild);
         return;
       }
+
+      // PAINEL DE ESTATÍSTICAS DE EVENTOS
+      if (customId === 'btn_eventos_atualizar') {
+        const EventStatsHandler = require('./handlers/eventStatsHandler');
+        await EventStatsHandler.handleAtualizar(interaction);
+        return;
+      }
+
+      if (customId === 'btn_eventos_exportar') {
+        await interaction.reply({
+          content: '⏳ Exportação de dados em desenvolvimento...',
+          ephemeral: true
+        });
+        return;
+      }
+
+      if (customId === 'btn_eventos_ajuda') {
+        await interaction.reply({
+          content: '❓ **Painel de Eventos**\n\nUse os menus acima para filtrar eventos por período ou cargo.',
+          ephemeral: true
+        });
+        return;
+      }
+
+      // CONFIGURAÇÕES
+      if (customId === 'config_taxa_guilda') {
+        await ConfigActions.handleTaxaGuilda(interaction);
+        return;
+      }
+
+      if (customId === 'config_registrar_guilda') {
+        await ConfigActions.handleRegistrarGuilda(interaction);
+        return;
+      }
+
+      if (customId === 'config_xp') {
+        await ConfigActions.handleXP(interaction);
+        return;
+      }
+
+      if (customId === 'config_taxa_bau') {
+        await ConfigActions.handleTaxaBau(interaction);
+        return;
+      }
+
+      if (customId === 'config_taxa_emprestimo') {
+        await ConfigActions.handleTaxaEmprestimo(interaction);
+        return;
+      }
+
+      if (customId === 'config_atualizar_bot') {
+        await ConfigActions.handleAtualizarBot(interaction);
+        return;
+      }
     }
 
     // ==================== SELECT MENUS ====================
@@ -579,6 +673,19 @@ client.on(Events.InteractionCreate, async interaction => {
         if (!global.orbTemp) global.orbTemp = new Map();
         global.orbTemp.set(interaction.user.id, { orbType });
         await OrbHandler.showOrbTypeSelect(interaction);
+        return;
+      }
+
+      // PAINEL DE ESTATÍSTICAS DE EVENTOS
+      if (interaction.customId === 'select_periodo_eventos') {
+        const EventStatsHandler = require('./handlers/eventStatsHandler');
+        await EventStatsHandler.handlePeriodSelect(interaction);
+        return;
+      }
+
+      if (interaction.customId === 'select_cargo_eventos') {
+        const EventStatsHandler = require('./handlers/eventStatsHandler');
+        await EventStatsHandler.handleRoleSelect(interaction);
         return;
       }
     }
@@ -693,6 +800,27 @@ client.on(Events.InteractionCreate, async interaction => {
         const orbType = parts[0];
         const userIds = parts[1].split(',');
         await OrbHandler.processOrbDeposit(interaction, orbType, userIds);
+        return;
+      }
+
+      // CONFIGURAÇÕES
+      if (interaction.customId === 'modal_taxa_guilda') {
+        await ConfigActions.handleTaxaSelect(interaction);
+        return;
+      }
+
+      if (interaction.customId === 'modal_taxas_bau') {
+        await ConfigActions.processTaxaBau(interaction);
+        return;
+      }
+
+      if (interaction.customId === 'modal_taxa_emprestimo') {
+        await ConfigActions.processTaxaEmprestimo(interaction);
+        return;
+      }
+
+      if (interaction.customId === 'modal_registrar_guilda') {
+        await ConfigActions.processGuildRegistration(interaction);
         return;
       }
     }

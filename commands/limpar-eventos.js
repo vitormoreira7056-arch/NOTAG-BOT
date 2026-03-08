@@ -56,7 +56,7 @@ module.exports = {
 
       // Criar collector para a confirmação
       const collector = interaction.channel.createMessageComponentCollector({
-        filter: i => i.user.id === ownerId && 
+        filter: i => i.user.id === ownerId &&
           (i.customId === 'confirmar_limpar_eventos' || i.customId === 'cancelar_limpar_eventos'),
         time: 30000, // 30 segundos para confirmar
         max: 1
@@ -68,10 +68,12 @@ module.exports = {
           await i.deferUpdate();
 
           try {
-            // Limpar histórico de eventos do banco
-            const eventCount = Database.eventHistory.length;
-            Database.eventHistory = [];
-            Database.saveEventHistory();
+            // Contar eventos no banco antes de limpar
+            const events = await Database.db.allAsync('SELECT * FROM events') || [];
+            const eventCount = events.length;
+
+            // Limpar tabela de eventos no banco
+            await Database.db.runAsync('DELETE FROM events');
 
             // Limpar eventos globais
             const activeCount = global.finishedEvents?.size || 0;

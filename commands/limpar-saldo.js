@@ -58,7 +58,7 @@ module.exports = {
 
       // Criar collector para a confirmação
       const collector = interaction.channel.createMessageComponentCollector({
-        filter: i => i.user.id === ownerId && 
+        filter: i => i.user.id === ownerId &&
           (i.customId === 'confirmar_limpar_saldo' || i.customId === 'cancelar_limpar_saldo'),
         time: 30000,
         max: 1
@@ -69,19 +69,26 @@ module.exports = {
           await i.deferUpdate();
 
           try {
-            const users = Database.getAllUsers();
+            // Buscar todos os usuários do banco
+            const users = await Database.db.allAsync('SELECT * FROM users') || [];
             let count = 0;
             let totalSaldo = 0;
 
             // Zerar saldo de todos os usuários
             for (const user of users) {
               totalSaldo += user.saldo || 0;
-              user.saldo = 0;
-              user.totalRecebido = 0;
-              user.totalSacado = 0;
-              user.emprestimosPendentes = 0;
-              user.totalEmprestimos = 0;
-              Database.updateUser(user.userId, user);
+
+              await Database.db.runAsync(`
+                UPDATE users SET 
+                  saldo = 0, 
+                  total_recebido = 0, 
+                  total_sacado = 0, 
+                  emprestimos_pendentes = 0, 
+                  total_emprestimos = 0,
+                  updated_at = ?
+                WHERE user_id = ?
+              `, [Date.now(), user.user_id]);
+
               count++;
             }
 
