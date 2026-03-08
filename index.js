@@ -425,6 +425,29 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
+      // PAINEL DE ESTATÍSTICAS DE EVENTOS (NOVO - CORRIGIDO)
+      if (customId === 'btn_eventos_atualizar') {
+        const EventStatsHandler = require('./handlers/eventStatsHandler');
+        await EventStatsHandler.handleAtualizar(interaction);
+        return;
+      }
+
+      if (customId === 'btn_eventos_exportar') {
+        await interaction.reply({
+          content: '⏳ Exportação de dados em desenvolvimento...',
+          ephemeral: true
+        });
+        return;
+      }
+
+      if (customId === 'btn_eventos_ajuda') {
+        await interaction.reply({
+          content: '❓ **Painel de Eventos**\n\nUse os menus acima para filtrar eventos por período ou cargo.',
+          ephemeral: true
+        });
+        return;
+      }
+
       // CONFIGURAÇÕES
       if (customId === 'config_taxa_guilda') {
         await ConfigActions.handleTaxaGuilda(interaction);
@@ -471,6 +494,19 @@ client.on(Events.InteractionCreate, async interaction => {
 
       if (interaction.customId === 'select_taxa_guilda') {
         await ConfigActions.handleTaxaSelect(interaction);
+        return;
+      }
+
+      // PAINEL DE ESTATÍSTICAS DE EVENTOS (NOVO - CORRIGIDO)
+      if (interaction.customId === 'select_periodo_eventos') {
+        const EventStatsHandler = require('./handlers/eventStatsHandler');
+        await EventStatsHandler.handlePeriodSelect(interaction);
+        return;
+      }
+
+      if (interaction.customId === 'select_cargo_eventos') {
+        const EventStatsHandler = require('./handlers/eventStatsHandler');
+        await EventStatsHandler.handleRoleSelect(interaction);
         return;
       }
     }
