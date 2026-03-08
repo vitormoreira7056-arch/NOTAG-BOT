@@ -48,6 +48,7 @@ class EventHandler {
         });
       }
 
+      // 🎯 Criar canal de voz com permissões básicas
       const canalVoz = await guild.channels.create({
         name: `⚔️-${nome.substring(0, 20)}`,
         type: ChannelType.GuildVoice,
@@ -56,9 +57,30 @@ class EventHandler {
           {
             id: guild.id,
             allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.Connect],
-            deny: [PermissionFlagsBits.Speak]
+            deny: [PermissionFlagsBits.Speak] // Inicia sem permissão de falar para everyone
           }
         ]
+      });
+
+      // 🎯 ADICIONAR: Permitir falar para cargos específicos (incluindo ADM)
+      const cargosPermitidos = ['ADM', 'Staff', 'Membro', 'Aliança', 'Convidado'];
+      for (const nomeCargo of cargosPermitidos) {
+        const cargo = guild.roles.cache.find(r => r.name === nomeCargo);
+        if (cargo) {
+          await canalVoz.permissionOverwrites.create(cargo.id, {
+            Speak: true,
+            Connect: true,
+            ViewChannel: true
+          });
+          console.log(`[EventHandler] Permissão de falar concedida para: ${nomeCargo}`);
+        }
+      }
+
+      // 🎯 ADICIONAR: Permitir falar para o criador do evento (mesmo sem cargo)
+      await canalVoz.permissionOverwrites.create(interaction.user.id, {
+        Speak: true,
+        Connect: true,
+        ViewChannel: true
       });
 
       const eventData = {
@@ -138,7 +160,7 @@ class EventHandler {
     const embed = new EmbedBuilder()
       .setTitle(`${statusEmojis[eventData.status]} ┃ ${eventData.nome}`)
       .setDescription(
-        `> ${eventData.descricao}\n\n` +
+        `\> ${eventData.descricao}\n\n` +
         `**👤 Criador:** <@${eventData.criadorId}>\n` +
         `**🕐 Horário:** \`${eventData.horario}\`\n` +
         `**📊 Status:** ${statusTextos[eventData.status]}\n` +
@@ -327,6 +349,19 @@ class EventHandler {
 
       const member = interaction.member;
       const canalVoz = interaction.guild.channels.cache.get(eventData.canalVozId);
+
+      // 🎯 ADICIONAR: Conceder permissão de falar quando entrar no evento
+      if (canalVoz) {
+        try {
+          await canalVoz.permissionOverwrites.create(member.id, {
+            Speak: true,
+            Connect: true,
+            ViewChannel: true
+          });
+        } catch (e) {
+          console.log('[EventHandler] Não foi possível conceder permissão de falar:', e.message);
+        }
+      }
 
       if (eventData.participantes.has(member.id)) {
         const participante = eventData.participantes.get(member.id);
@@ -649,7 +684,7 @@ class EventHandler {
         if (msg) await msg.delete();
       }
 
-      // 🎯 CORREÇÃO: Salvar em eventos finalizados antes de deletar
+      // Salvar em eventos finalizados antes de deletar
       if (!global.finishedEvents) global.finishedEvents = new Map();
       global.finishedEvents.set(eventId, {
         ...eventData,
@@ -715,8 +750,8 @@ class EventHandler {
             tempo += Date.now() - data.tempoInicio;
           }
 
-          const percentagem = tempoTotalParticipacao > 0 ? 
-            ((tempo / tempoTotalParticipacao) * 100).toFixed(2) : 
+          const percentagem = tempoTotalParticipacao > 0 ?
+            ((tempo / tempoTotalParticipacao) * 100).toFixed(2) :
             (100 / participantesArray.length).toFixed(2);
 
           const tempoMin = Math.floor(tempo / 1000 / 60);
@@ -742,7 +777,7 @@ class EventHandler {
       const embedResumo = new EmbedBuilder()
         .setTitle(`✅ ┃ ${eventData.nome.toUpperCase()}`)
         .setDescription(
-          `> ${eventData.descricao}\n\n` +
+          `\> ${eventData.descricao}\n\n` +
           `**👤 Criador:** <@${eventData.criadorId}>\n` +
           `**🕐 Horário:** \`${eventData.horario}\`\n` +
           `**⏱️ Duração Total:** \`${tempoTotalMin}\` minutos\n` +
