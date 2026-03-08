@@ -6,7 +6,8 @@ const {
   Routes,
   Events,
   PermissionFlagsBits,
-  EmbedBuilder
+  EmbedBuilder,
+  ChannelType
 } = require('discord.js');
 const fs = require('fs');
 require('dotenv').config();
@@ -21,11 +22,12 @@ const EventHandler = require('./handlers/eventHandler');
 const LootSplitHandler = require('./handlers/lootSplitHandler');
 const Database = require('./utils/database');
 const DepositHandler = require('./handlers/depositHandler');
-const FinanceHandler = require('./handlers/financeHandler'); // ADICIONADO
-const ConsultarSaldoHandler = require('./handlers/consultarSaldoHandler'); // ADICIONADO
-const PerfilHandler = require('./handlers/perfilHandler'); // ADICIONADO
-const OrbHandler = require('./handlers/orbHandler'); // ADICIONADO
-const XpEventHandler = require('./handlers/xpEventHandler'); // ADICIONADO
+const FinanceHandler = require('./handlers/financeHandler');
+const ConsultarSaldoHandler = require('./handlers/consultarSaldoHandler');
+const PerfilHandler = require('./handlers/perfilHandler');
+const OrbHandler = require('./handlers/orbHandler');
+const XpHandler = require('./handlers/xpHandler');
+const XpEventHandler = require('./handlers/xpEventHandler');
 
 // Criar cliente
 const client = new Client({
@@ -63,10 +65,10 @@ global.historicoRegistros = new Map();
 global.activeEvents = new Map();
 global.finishedEvents = new Map();
 global.simulations = new Map();
-global.pendingWithdrawals = new Map(); // ADICIONADO
-global.pendingLoans = new Map(); // ADICIONADO
-global.pendingTransfers = new Map(); // ADICIONADO
-global.pendingOrbDeposits = new Map(); // ADICIONADO
+global.pendingWithdrawals = new Map();
+global.pendingLoans = new Map();
+global.pendingTransfers = new Map();
+global.pendingOrbDeposits = new Map();
 global.client = client;
 
 // Carregar dados persistidos (blacklist e histórico)
@@ -97,7 +99,7 @@ client.once(Events.ClientReady, async () => {
   console.log(`📅 Data de início: ${new Date().toLocaleString()}`);
 
   // Inicializar sistemas
-  await Database.initialize(); // ADICIONADO await
+  await Database.initialize();
   RegistrationActions.initialize();
   EventHandler.initialize();
   console.log('📝 Sistemas inicializados: Database + Registro + Eventos');
@@ -123,6 +125,90 @@ client.once(Events.ClientReady, async () => {
     console.log(`📋 Total de comandos: ${commands.length}`);
   } catch (error) {
     console.error('❌ Erro ao registrar comandos slash:', error);
+  }
+});
+
+// ==================== VERIFICAÇÃO DE ENTRADA EM CALL DE EVENTO ====================
+client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
+  try {
+    // Se não entrou em um canal (saiu ou mudou), ignorar
+    if (!newState.channelId) return;
+
+    // Se entrou no mesmo canal (não mudou), ignorar
+    if (oldState.channelId === newState.channelId) return;
+
+    const member = newState.member;
+    const channel = newState.channel;
+
+    // Verificar se é um canal de evento (começa com ⚔️-)
+    if (!channel.name.startsWith('⚔️-')) return;
+
+    // Verificar se o usuário está em algum evento ativo
+    let isParticipating = false;
+    let eventData = null;
+
+    // Verificar em todos os eventos ativos
+    for (const [eventId, event] of global.activeEvents) {
+      if (event.canalVozId === channel.id) {
+        eventData = event;
+        if (event.participantes.has(member.id)) {
+          isParticipating = true;
+        }
+        break;
+      }
+    }
+
+    // Se não está participando, remover da call
+    if (!isParticipating && eventData) {
+      console.log(`[VoiceState] Usuário ${member.id} tentou entrar na call ${channel.id} sem participar do evento`);
+
+      // Tentar mover para "Aguardando-Evento" ou desconectar
+      const canalAguardando = newState.guild.channels.cache.find(
+        c => c.name === '🔊╠Aguardando-Evento' && c.type === ChannelType.GuildVoice
+      );
+
+      if (canalAguardando) {
+        try {
+          await member.voice.setChannel(canalAguardando.id);
+          console.log(`[VoiceState] Movido ${member.id} para Aguardando-Evento`);
+        } catch (e) {
+          console.log(`[VoiceState] Não foi possível mover, desconectando...`);
+          try {
+            await member.voice.disconnect('Não está participando do evento');
+          } catch (e2) {
+            console.log(`[VoiceState] Não foi possível desconectar`);
+          }
+        }
+      } else {
+        // Se não tem canal de aguardar, desconectar
+        try {
+          await member.voice.disconnect('Não está participando do evento');
+        } catch (e) {
+          console.log(`[VoiceState] Não foi possível desconectar`);
+        }
+      }
+
+      // Enviar DM explicando
+      try {
+        await member.send({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle('⚠️ Acesso Negado')
+              .setDescription(
+                `Você tentou entrar na call do evento **${eventData.nome}** sem estar na lista de participantes.\n\n` +
+                `👉 Clique no botão **"✋ Entrar no Evento"** no canal <#${eventData.canalTextoId}> para participar primeiro!`
+              )
+              .setColor(0xE74C3C)
+              .setTimestamp()
+          ]
+        });
+      } catch (e) {
+        // Se não puder enviar DM, ignorar
+      }
+    }
+
+  } catch (error) {
+    console.error('[VoiceState] Erro na verificação:', error);
   }
 });
 
@@ -302,14 +388,6 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      if (customId.startsWith('loot_atualizar_part_')) {
-        await interaction.reply({
-          content: '⚙️ Use o comando `/atualizar [membro] [porcentagem]` para ajustar participação.',
-          ephemeral: true
-        });
-        return;
-      }
-
       if (customId.startsWith('fin_aprovar_')) {
         const simulationId = customId.replace('fin_aprovar_', '');
         await LootSplitHandler.handleAprovacaoFinanceira(interaction, simulationId, true);
@@ -319,21 +397,6 @@ client.on(Events.InteractionCreate, async interaction => {
       if (customId.startsWith('fin_recusar_')) {
         const simulationId = customId.replace('fin_recusar_', '');
         await LootSplitHandler.handleAprovacaoFinanceira(interaction, simulationId, false);
-        return;
-      }
-
-      if (customId.startsWith('loot_arquivar_')) {
-        const simulationId = customId.replace('loot_arquivar_', '');
-        const simulation = global.simulations?.get(simulationId);
-
-        if (simulation) {
-          await LootSplitHandler.handleArquivar(interaction, simulation.eventId, simulationId);
-        } else {
-          await interaction.reply({
-            content: '❌ Simulação não encontrada!',
-            ephemeral: true
-          });
-        }
         return;
       }
 
@@ -392,16 +455,7 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      if (customId.startsWith('dep_verificar_')) {
-        const comprovante = customId.replace('dep_verificar_', '');
-        await interaction.reply({
-          content: `📎 **Comprovante:** ${comprovante}`,
-          ephemeral: true
-        });
-        return;
-      }
-
-      // SISTEMA DE CONSULTAR SALDO (NOVO - CORRIGIDO)
+      // SISTEMA DE CONSULTAR SALDO
       if (customId === 'btn_consultar_saldo') {
         await ConsultarSaldoHandler.handleConsultarSaldo(interaction);
         return;
@@ -422,7 +476,7 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // SISTEMA FINANCEIRO - Aprovações/Recusas (ADICIONADO)
+      // SISTEMA FINANCEIRO - Aprovações/Recusas
       if (customId.startsWith('fin_confirmar_saque_')) {
         const withdrawalId = customId.replace('fin_confirmar_saque_', '');
         await FinanceHandler.handleConfirmWithdrawal(interaction, withdrawalId);
@@ -459,7 +513,7 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // ALBION ACADEMY - PERFIL (ADICIONADO)
+      // ALBION ACADEMY - PERFIL
       if (customId === 'btn_criar_xp_event') {
         await XpEventHandler.showCreateEventModal(interaction);
         return;
@@ -475,7 +529,7 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // ALBION ACADEMY - ORBS (ADICIONADO)
+      // ALBION ACADEMY - ORBS
       if (customId === 'btn_depositar_orb') {
         await OrbHandler.showUserSelect(interaction);
         return;
@@ -500,60 +554,6 @@ client.on(Events.InteractionCreate, async interaction => {
         await MemberListPanel.updatePanel(interaction.message, interaction.guild);
         return;
       }
-
-      // PAINEL DE ESTATÍSTICAS DE EVENTOS (NOVO - CORRIGIDO)
-      if (customId === 'btn_eventos_atualizar') {
-        const EventStatsHandler = require('./handlers/eventStatsHandler');
-        await EventStatsHandler.handleAtualizar(interaction);
-        return;
-      }
-
-      if (customId === 'btn_eventos_exportar') {
-        await interaction.reply({
-          content: '⏳ Exportação de dados em desenvolvimento...',
-          ephemeral: true
-        });
-        return;
-      }
-
-      if (customId === 'btn_eventos_ajuda') {
-        await interaction.reply({
-          content: '❓ **Painel de Eventos**\n\nUse os menus acima para filtrar eventos por período ou cargo.',
-          ephemeral: true
-        });
-        return;
-      }
-
-      // CONFIGURAÇÕES
-      if (customId === 'config_taxa_guilda') {
-        await ConfigActions.handleTaxaGuilda(interaction);
-        return;
-      }
-
-      if (customId === 'config_registrar_guilda') {
-        await ConfigActions.handleRegistrarGuilda(interaction);
-        return;
-      }
-
-      if (customId === 'config_xp') {
-        await ConfigActions.handleXP(interaction);
-        return;
-      }
-
-      if (customId === 'config_taxa_bau') {
-        await ConfigActions.handleTaxaBau(interaction);
-        return;
-      }
-
-      if (customId === 'config_taxa_emprestimo') {
-        await ConfigActions.handleTaxaEmprestimo(interaction);
-        return;
-      }
-
-      if (customId === 'config_atualizar_bot') {
-        await ConfigActions.handleAtualizarBot(interaction);
-        return;
-      }
     }
 
     // ==================== SELECT MENUS ====================
@@ -573,31 +573,17 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // ALBION ACADEMY - ORBS (ADICIONADO)
+      // ALBION ACADEMY - ORBS
       if (interaction.customId === 'select_orb_type') {
         const orbType = interaction.values[0];
-        // Armazena temporariamente para uso no próximo modal
         if (!global.orbTemp) global.orbTemp = new Map();
         global.orbTemp.set(interaction.user.id, { orbType });
         await OrbHandler.showOrbTypeSelect(interaction);
         return;
       }
-
-      // PAINEL DE ESTATÍSTICAS DE EVENTOS (NOVO - CORRIGIDO)
-      if (interaction.customId === 'select_periodo_eventos') {
-        const EventStatsHandler = require('./handlers/eventStatsHandler');
-        await EventStatsHandler.handlePeriodSelect(interaction);
-        return;
-      }
-
-      if (interaction.customId === 'select_cargo_eventos') {
-        const EventStatsHandler = require('./handlers/eventStatsHandler');
-        await EventStatsHandler.handleRoleSelect(interaction);
-        return;
-      }
     }
 
-    // ==================== USER SELECT MENUS (ADICIONADO) ====================
+    // ==================== USER SELECT MENUS ====================
     if (interaction.isUserSelectMenu()) {
       // ALBION ACADEMY - XP MANUAL
       if (interaction.customId === 'select_xp_target_user') {
@@ -672,7 +658,7 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // MODAIS DE FINANÇAS (CORRIGIDO - Usando FinanceHandler correto)
+      // MODAIS DE FINANÇAS
       if (interaction.customId === 'modal_sacar_saldo') {
         await FinanceHandler.processWithdrawRequest(interaction);
         return;
@@ -694,40 +680,19 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // ALBION ACADEMY - XP MANUAL (ADICIONADO)
+      // ALBION ACADEMY - XP MANUAL
       if (interaction.customId.startsWith('modal_depositar_xp_')) {
         const targetUserId = interaction.customId.replace('modal_depositar_xp_', '');
         await PerfilHandler.processManualXpDeposit(interaction, targetUserId);
         return;
       }
 
-      // ALBION ACADEMY - ORBS (ADICIONADO)
+      // ALBION ACADEMY - ORBS
       if (interaction.customId.startsWith('modal_depositar_orb_')) {
         const parts = interaction.customId.replace('modal_depositar_orb_', '').split('_');
         const orbType = parts[0];
         const userIds = parts[1].split(',');
         await OrbHandler.processOrbDeposit(interaction, orbType, userIds);
-        return;
-      }
-
-      // CONFIGURAÇÕES
-      if (interaction.customId === 'modal_taxa_guilda') {
-        await ConfigActions.handleTaxaSelect(interaction);
-        return;
-      }
-
-      if (interaction.customId === 'modal_taxas_bau') {
-        await ConfigActions.processTaxaBau(interaction);
-        return;
-      }
-
-      if (interaction.customId === 'modal_taxa_emprestimo') {
-        await ConfigActions.processTaxaEmprestimo(interaction);
-        return;
-      }
-
-      if (interaction.customId === 'modal_registrar_guilda') {
-        await ConfigActions.processGuildRegistration(interaction);
         return;
       }
     }

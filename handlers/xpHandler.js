@@ -5,9 +5,7 @@ const {
   ButtonStyle,
   ModalBuilder,
   TextInputBuilder,
-  TextInputStyle,
-  StringSelectMenuBuilder,
-  StringSelectMenuOptionBuilder
+  TextInputStyle
 } = require('discord.js');
 const Database = require('../utils/database');
 
@@ -23,17 +21,15 @@ class XpHandler {
   /**
    * Retorna XP necessário para próximo nível
    */
-  getXpForNextLevel(level) {
-    return Math.floor(this.xpConfig.baseXp * Math.pow(this.xpConfig.multiplier, level - 1));
+  static getXpForNextLevel(level) {
+    return Math.floor(100 * Math.pow(1.5, level - 1));
   }
 
   /**
    * Adiciona XP a um usuário
-   * CORREÇÃO: Adicionado async/await
    */
-  async addXp(userId, amount, reason, guild, channel) {
+  static async addXp(userId, amount, reason, guild, channel) {
     try {
-      // CORREÇÃO: Usar await para chamada async
       const user = await Database.getUser(userId);
 
       if (!user) {
@@ -53,13 +49,13 @@ class XpHandler {
 
       // Verificar level up
       let leveledUp = false;
-      while (user.xp >= this.getXpForNextLevel(user.level)) {
-        user.xp -= this.getXpForNextLevel(user.level);
+      const xpForNext = XpHandler.getXpForNextLevel(user.level);
+      while (user.xp >= xpForNext) {
+        user.xp -= xpForNext;
         user.level++;
         leveledUp = true;
       }
 
-      // CORREÇÃO: Usar await para chamada async
       await Database.updateUser(userId, {
         xp: user.xp,
         level: user.level,
@@ -68,12 +64,12 @@ class XpHandler {
 
       // Enviar log no canal log-xp
       if (channel) {
-        await this.sendXpLog(channel, userId, amount, reason, user.level, leveledUp);
+        await XpHandler.sendXpLog(channel, userId, amount, reason, user.level, leveledUp);
       }
 
       // Se upou de nível, enviar DM
       if (leveledUp) {
-        await this.sendLevelUpDM(userId, oldLevel, user.level, guild);
+        await XpHandler.sendLevelUpDM(userId, oldLevel, user.level, guild);
       }
 
       return { success: true, leveledUp, newLevel: user.level };
@@ -85,11 +81,9 @@ class XpHandler {
 
   /**
    * Remove XP de um usuário
-   * CORREÇÃO: Adicionado async/await
    */
-  async removeXp(userId, amount, reason, channel) {
+  static async removeXp(userId, amount, reason, channel) {
     try {
-      // CORREÇÃO: Usar await
       const user = await Database.getUser(userId);
 
       if (!user) {
@@ -102,7 +96,6 @@ class XpHandler {
       user.xp = Math.max(0, user.xp - amount);
       user.totalXp = Math.max(0, user.totalXp - amount);
 
-      // CORREÇÃO: Usar await
       await Database.updateUser(userId, {
         xp: user.xp,
         total_xp: user.totalXp
@@ -133,7 +126,7 @@ class XpHandler {
   /**
    * Envia log de XP no canal
    */
-  async sendXpLog(channel, userId, amount, reason, level, leveledUp) {
+  static async sendXpLog(channel, userId, amount, reason, level, leveledUp) {
     try {
       const embed = new EmbedBuilder()
         .setTitle(leveledUp ? '🎉 XP ADICIONADO + LEVEL UP!' : '✨ XP ADICIONADO')
@@ -162,7 +155,7 @@ class XpHandler {
   /**
    * Envia DM de level up
    */
-  async sendLevelUpDM(userId, oldLevel, newLevel, guild) {
+  static async sendLevelUpDM(userId, oldLevel, newLevel, guild) {
     try {
       const user = await global.client.users.fetch(userId);
 
@@ -192,11 +185,9 @@ class XpHandler {
 
   /**
    * Mostra perfil de XP do usuário
-   * CORREÇÃO: Adicionado async/await
    */
-  async showProfile(userId, guild) {
+  static async showProfile(userId, guild) {
     try {
-      // CORREÇÃO: Usar await
       const user = await Database.getUser(userId);
 
       if (!user) {
@@ -204,13 +195,12 @@ class XpHandler {
       }
 
       const discordUser = await global.client.users.fetch(userId).catch(() => null);
-      const member = await guild.members.fetch(userId).catch(() => null);
 
       const xp = user.xp || 0;
       const level = user.level || 1;
       const totalXp = user.totalXp || 0;
       const insignias = user.insignias || [];
-      const xpForNext = this.getXpForNextLevel(level);
+      const xpForNext = XpHandler.getXpForNextLevel(level);
       const progressPercent = Math.floor((xp / xpForNext) * 100);
 
       // Criar barra de progresso
@@ -255,7 +245,6 @@ class XpHandler {
         '**Ações disponíveis:**'
       )
       .setColor(0x9B59B6)
-      .setImage('https://i.imgur.com/example.png') // REMOVER SE NÃO TIVER IMAGEM VÁLIDA
       .setTimestamp();
 
     const botoes = new ActionRowBuilder()
@@ -320,9 +309,8 @@ class XpHandler {
 
   /**
    * Processa criação de evento XP
-   * CORREÇÃO: Adicionado async/await
    */
-  async processXpEventCreation(interaction) {
+  static async processXpEventCreation(interaction) {
     try {
       const nome = interaction.fields.getTextInputValue('nome_evento_xp');
       const descricao = interaction.fields.getTextInputValue('desc_evento_xp') || 'Sem descrição';
@@ -336,7 +324,6 @@ class XpHandler {
         });
       }
 
-      // Verificar se canal log-xp existe
       const canalLog = interaction.guild.channels.cache.find(c => c.name === 'log-xp');
       if (!canalLog) {
         return interaction.reply({
@@ -347,7 +334,6 @@ class XpHandler {
 
       const eventId = `xp_${Date.now()}_${interaction.user.id}`;
 
-      // Criar mensagem de evento
       const embed = new EmbedBuilder()
         .setTitle(`🎮 ${nome}`)
         .setDescription(descricao)
@@ -371,7 +357,6 @@ class XpHandler {
             .setStyle(ButtonStyle.Danger)
         );
 
-      // Armazenar evento globalmente
       if (!global.activeXpEvents) global.activeXpEvents = new Map();
       global.activeXpEvents.set(eventId, {
         id: eventId,
@@ -404,9 +389,8 @@ class XpHandler {
 
   /**
    * Processa participação em evento XP
-   * CORREÇÃO: Adicionado async/await
    */
-  async handleEventParticipation(interaction, eventId) {
+  static async handleEventParticipation(interaction, eventId) {
     try {
       const event = global.activeXpEvents?.get(eventId);
       if (!event) {
@@ -441,9 +425,8 @@ class XpHandler {
 
   /**
    * Finaliza evento XP e distribui XP
-   * CORREÇÃO: Adicionado async/await
    */
-  async finalizeXpEvent(interaction, eventId) {
+  static async finalizeXpEvent(interaction, eventId) {
     try {
       const event = global.activeXpEvents?.get(eventId);
       if (!event) {
@@ -471,10 +454,9 @@ class XpHandler {
         });
       }
 
-      // Distribuir XP para participantes
       let distribuidos = 0;
       for (const userId of event.participantes) {
-        await this.addXp(userId, event.xpBase, `Participação em: ${event.nome}`, interaction.guild, canalLog);
+        await XpHandler.addXp(userId, event.xpBase, `Participação em: ${event.nome}`, interaction.guild, canalLog);
         distribuidos++;
       }
 
@@ -485,7 +467,6 @@ class XpHandler {
         ephemeral: false
       });
 
-      // Remover botões da mensagem original
       try {
         await interaction.message.edit({
           components: []
@@ -505,14 +486,11 @@ class XpHandler {
 
   /**
    * Mostra ranking de XP
-   * CORREÇÃO: Adicionado async/await
    */
-  async showRanking(guild, limit = 10) {
+  static async showRanking(guild, limit = 10) {
     try {
-      // CORREÇÃO: Usar await se getAllUsers for async
       const allUsers = await Database.getAllUsers();
 
-      // Ordenar por XP total
       const sortedUsers = allUsers
         .filter(u => u.totalXp > 0)
         .sort((a, b) => (b.totalXp || 0) - (a.totalXp || 0))

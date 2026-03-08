@@ -48,7 +48,7 @@ class EventHandler {
         });
       }
 
-      // 🎯 Criar canal de voz com permissões básicas
+      // Criar canal de voz com permissões básicas
       const canalVoz = await guild.channels.create({
         name: `⚔️-${nome.substring(0, 20)}`,
         type: ChannelType.GuildVoice,
@@ -56,30 +56,29 @@ class EventHandler {
         permissionOverwrites: [
           {
             id: guild.id,
-            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.Connect],
-            deny: [PermissionFlagsBits.Speak] // Inicia sem permissão de falar para everyone
+            allow: [PermissionFlagsBits.ViewChannel],
+            deny: [PermissionFlagsBits.Connect, PermissionFlagsBits.Speak]
           }
         ]
       });
 
-      // 🎯 ADICIONAR: Permitir falar para cargos específicos (incluindo ADM)
-      const cargosPermitidos = ['ADM', 'Staff', 'Membro', 'Aliança', 'Convidado'];
+      // Permitir falar para cargos específicos (mas não conectar ainda)
+      const cargosPermitidos = ['ADM', 'Staff'];
       for (const nomeCargo of cargosPermitidos) {
         const cargo = guild.roles.cache.find(r => r.name === nomeCargo);
         if (cargo) {
           await canalVoz.permissionOverwrites.create(cargo.id, {
-            Speak: true,
             Connect: true,
+            Speak: true,
             ViewChannel: true
           });
-          console.log(`[EventHandler] Permissão de falar concedida para: ${nomeCargo}`);
         }
       }
 
-      // 🎯 ADICIONAR: Permitir falar para o criador do evento (mesmo sem cargo)
+      // Permitir falar para o criador do evento
       await canalVoz.permissionOverwrites.create(interaction.user.id, {
-        Speak: true,
         Connect: true,
+        Speak: true,
         ViewChannel: true
       });
 
@@ -160,7 +159,7 @@ class EventHandler {
     const embed = new EmbedBuilder()
       .setTitle(`${statusEmojis[eventData.status]} ┃ ${eventData.nome}`)
       .setDescription(
-        `\> ${eventData.descricao}\n\n` +
+        `> ${eventData.descricao}\n\n` +
         `**👤 Criador:** <@${eventData.criadorId}>\n` +
         `**🕐 Horário:** \`${eventData.horario}\`\n` +
         `**📊 Status:** ${statusTextos[eventData.status]}\n` +
@@ -350,16 +349,17 @@ class EventHandler {
       const member = interaction.member;
       const canalVoz = interaction.guild.channels.cache.get(eventData.canalVozId);
 
-      // 🎯 ADICIONAR: Conceder permissão de falar quando entrar no evento
+      // Conceder permissão de conectar e falar no canal de voz
       if (canalVoz) {
         try {
           await canalVoz.permissionOverwrites.create(member.id, {
-            Speak: true,
             Connect: true,
+            Speak: true,
             ViewChannel: true
           });
+          console.log(`[EventHandler] Permissão concedida para ${member.id} no canal ${canalVoz.id}`);
         } catch (e) {
-          console.log('[EventHandler] Não foi possível conceder permissão de falar:', e.message);
+          console.log('[EventHandler] Não foi possível conceder permissão:', e.message);
         }
       }
 
@@ -425,7 +425,10 @@ class EventHandler {
 
       const participante = eventData.participantes.get(interaction.user.id);
       if (!participante) {
-        return interaction.reply({ content: '❌ Você não está participando deste evento!', ephemeral: true });
+        return interaction.reply({ 
+          content: '❌ Você não está participando deste evento! Clique em "Entrar no Evento" primeiro.', 
+          ephemeral: true 
+        });
       }
 
       if (participante.pausado) {
@@ -777,7 +780,7 @@ class EventHandler {
       const embedResumo = new EmbedBuilder()
         .setTitle(`✅ ┃ ${eventData.nome.toUpperCase()}`)
         .setDescription(
-          `\> ${eventData.descricao}\n\n` +
+          `> ${eventData.descricao}\n\n` +
           `**👤 Criador:** <@${eventData.criadorId}>\n` +
           `**🕐 Horário:** \`${eventData.horario}\`\n` +
           `**⏱️ Duração Total:** \`${tempoTotalMin}\` minutos\n` +
