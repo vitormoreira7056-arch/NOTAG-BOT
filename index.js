@@ -5,7 +5,8 @@ const {
   REST,
   Routes,
   Events,
-  PermissionFlagsBits
+  PermissionFlagsBits,
+  EmbedBuilder
 } = require('discord.js');
 const fs = require('fs');
 require('dotenv').config();
@@ -19,7 +20,7 @@ const EventPanel = require('./handlers/eventPanel');
 const EventHandler = require('./handlers/eventHandler');
 const LootSplitHandler = require('./handlers/lootSplitHandler');
 const Database = require('./utils/database');
-const DepositHandler = require('./handlers/depositHandler'); // NOVO: Importar handler de depósito
+const DepositHandler = require('./handlers/depositHandler');
 
 // Criar cliente
 const client = new Client({
@@ -236,7 +237,6 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // 🎯 CORREÇÃO: Verificar evt_pausar_global_ ANTES de evt_pausar_
       if (customId.startsWith('evt_pausar_global_')) {
         const eventId = customId.replace('evt_pausar_global_', '');
         await EventHandler.handlePausarGlobal(interaction, eventId, true);
@@ -249,7 +249,6 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // Handler de pausa individual (DEPOIS dos handlers globais)
       if (customId.startsWith('evt_pausar_')) {
         const eventId = customId.replace('evt_pausar_', '');
         await EventHandler.handlePausar(interaction, eventId);
@@ -314,7 +313,6 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // 🎯 CORREÇÃO: Handler do botão arquivar (apenas simulationId)
       if (customId.startsWith('loot_arquivar_')) {
         const simulationId = customId.replace('loot_arquivar_', '');
         const simulation = global.simulations?.get(simulationId);
@@ -330,7 +328,7 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // ==================== SISTEMA DE DEPÓSITO (NOVO) ====================
+      // SISTEMA DE DEPÓSITO
       if (customId === 'btn_deposito_novo') {
         await DepositHandler.handleDepositoButton(interaction);
         return;
@@ -346,14 +344,12 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // Handler de aprovação de depósito (tesoureiros)
       if (customId.startsWith('dep_aprovar_')) {
         const parts = customId.split('_');
         const depositId = parts[2];
         const userId = parts[3];
         const valor = parts[4];
 
-        // Verificar se é tesoureiro
         const isTesoureiro = interaction.member.roles.cache.some(r => r.name === 'tesoureiro') ||
           interaction.member.roles.cache.some(r => r.name === 'ADM') ||
           interaction.member.permissions.has(PermissionFlagsBits.Administrator);
@@ -393,6 +389,31 @@ client.on(Events.InteractionCreate, async interaction => {
           content: `📎 **Comprovante:** ${comprovante}`,
           ephemeral: true
         });
+        return;
+      }
+
+      // SISTEMA DE CONSULTAR SALDO (NOVO)
+      if (customId === 'btn_consultar_saldo') {
+        const ConsultarSaldoHandler = require('./handlers/consultarSaldoHandler');
+        await ConsultarSaldoHandler.handleConsultarSaldo(interaction);
+        return;
+      }
+
+      if (customId === 'btn_sacar_saldo') {
+        const ConsultarSaldoHandler = require('./handlers/consultarSaldoHandler');
+        await ConsultarSaldoHandler.handleSacarSaldo(interaction);
+        return;
+      }
+
+      if (customId === 'btn_solicitar_emprestimo') {
+        const ConsultarSaldoHandler = require('./handlers/consultarSaldoHandler');
+        await ConsultarSaldoHandler.handleSolicitarEmprestimo(interaction);
+        return;
+      }
+
+      if (customId === 'btn_transferir_saldo') {
+        const ConsultarSaldoHandler = require('./handlers/consultarSaldoHandler');
+        await ConsultarSaldoHandler.handleTransferirSaldo(interaction);
         return;
       }
 
@@ -438,7 +459,6 @@ client.on(Events.InteractionCreate, async interaction => {
 
     // ==================== SELECT MENUS ====================
     if (interaction.isStringSelectMenu()) {
-      // Sistema de Registro
       if (interaction.customId === 'select_server_registro') {
         await RegistrationModal.processServerSelect(interaction);
         return;
@@ -449,7 +469,6 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // Configurações
       if (interaction.customId === 'select_taxa_guilda') {
         await ConfigActions.handleTaxaSelect(interaction);
         return;
@@ -504,31 +523,44 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // SISTEMA DE DEPÓSITO (NOVO)
+      // SISTEMA DE DEPÓSITO
       if (interaction.customId === 'modal_deposito_valor') {
         await DepositHandler.processDeposito(interaction);
         return;
       }
 
-      // CONFIGURAÇÕES - Taxa da Guilda
+      // MODAIS DE FINANÇAS (Consultar Saldo) - NOVO
+      if (interaction.customId === 'modal_sacar_saldo') {
+        await processWithdrawal(interaction);
+        return;
+      }
+
+      if (interaction.customId === 'modal_solicitar_emprestimo') {
+        await processLoanRequest(interaction);
+        return;
+      }
+
+      if (interaction.customId === 'modal_transferir_saldo') {
+        await processTransfer(interaction);
+        return;
+      }
+
+      // CONFIGURAÇÕES
       if (interaction.customId === 'modal_taxa_guilda') {
         await ConfigActions.handleTaxaSelect(interaction);
         return;
       }
 
-      // 🎯 CORREÇÃO: Modal de taxas de baú (FALTAVA)
       if (interaction.customId === 'modal_taxas_bau') {
         await ConfigActions.processTaxaBau(interaction);
         return;
       }
 
-      // 🎯 CORREÇÃO: Modal de taxa de empréstimo (FALTAVA)
       if (interaction.customId === 'modal_taxa_emprestimo') {
         await ConfigActions.processTaxaEmprestimo(interaction);
         return;
       }
 
-      // CONFIGURAÇÕES - Registrar Guilda
       if (interaction.customId === 'modal_registrar_guilda') {
         await ConfigActions.processGuildRegistration(interaction);
         return;
@@ -539,10 +571,14 @@ client.on(Events.InteractionCreate, async interaction => {
     console.error('❌ Erro no handler de interações:', error);
 
     try {
-      if (interaction.isRepliable() && !interaction.replied) {
+      if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
         await interaction.reply({
           content: '❌ Ocorreu um erro inesperado. Tente novamente.',
           ephemeral: true
+        });
+      } else if (interaction.isRepliable() && interaction.deferred && !interaction.replied) {
+        await interaction.editReply({
+          content: '❌ Ocorreu um erro inesperado. Tente novamente.'
         });
       }
     } catch (replyError) {
@@ -556,7 +592,197 @@ client.on(Events.GuildMemberRemove, async (member) => {
   await GuildMemberRemoveHandler.handle(member);
 });
 
-// Handler de Erros Globais
+// ==================== FUNÇÕES AUXILIARES DE FINANÇAS ====================
+
+async function processWithdrawal(interaction) {
+  try {
+    const valor = parseFloat(interaction.fields.getTextInputValue('valor_saque'));
+
+    if (isNaN(valor) || valor <= 0) {
+      return interaction.reply({
+        content: '❌ Valor inválido! Digite um número positivo.',
+        ephemeral: true
+      });
+    }
+
+    const userId = interaction.user.id;
+    const saldoAtual = Database.getSaldo(userId);
+    const valorUnidades = valor * 1000000;
+
+    if (saldoAtual < valorUnidades) {
+      return interaction.reply({
+        content: `❌ Saldo insuficiente!\n💰 Seu saldo: ${(saldoAtual / 1000000).toFixed(2)} milhões\n💸 Valor solicitado: ${valor} milhões`,
+        ephemeral: true
+      });
+    }
+
+    // Criar solicitação de saque (pendente de aprovação)
+    const logChannel = interaction.guild.channels.cache.find(c => c.name === '📜╠logs-banco');
+    if (logChannel) {
+      const embed = new EmbedBuilder()
+        .setTitle('💸 NOVA SOLICITAÇÃO DE SAQUE')
+        .setDescription(`Usuário: ${interaction.user}`)
+        .addFields(
+          { name: 'Valor', value: `${valor} milhões`, inline: true },
+          { name: 'Status', value: '⏳ Pendente', inline: true }
+        )
+        .setColor(0xF39C12)
+        .setTimestamp();
+
+      const tesoureiroRole = interaction.guild.roles.cache.find(r => r.name === 'tesoureiro');
+      const mention = tesoureiroRole ? `<@&${tesoureiroRole.id}>` : '@tesoureiro';
+
+      await logChannel.send({ 
+        content: `${mention} Nova solicitação de saque!`,
+        embeds: [embed] 
+      });
+    }
+
+    await interaction.reply({
+      content: `✅ Solicitação de saque de **${valor} milhões** enviada!\n⏳ Aguarde aprovação de um tesoureiro.`,
+      ephemeral: true
+    });
+
+    console.log(`[Finance] Withdrawal request: ${valor}M by ${interaction.user.tag}`);
+
+  } catch (error) {
+    console.error('[Finance] Error processing withdrawal:', error);
+    await interaction.reply({
+      content: '❌ Erro ao processar saque. Tente novamente.',
+      ephemeral: true
+    });
+  }
+}
+
+async function processLoanRequest(interaction) {
+  try {
+    const valor = parseFloat(interaction.fields.getTextInputValue('valor_emprestimo'));
+    const motivo = interaction.fields.getTextInputValue('motivo_emprestimo');
+
+    if (isNaN(valor) || valor <= 0) {
+      return interaction.reply({
+        content: '❌ Valor inválido! Digite um número positivo.',
+        ephemeral: true
+      });
+    }
+
+    const logChannel = interaction.guild.channels.cache.find(c => c.name === '📜╠logs-banco');
+    if (logChannel) {
+      const embed = new EmbedBuilder()
+        .setTitle('💳 NOVA SOLICITAÇÃO DE EMPRÉSTIMO')
+        .setDescription(`Usuário: ${interaction.user}`)
+        .addFields(
+          { name: 'Valor', value: `${valor} milhões`, inline: true },
+          { name: 'Motivo', value: motivo, inline: false }
+        )
+        .setColor(0x3498DB)
+        .setTimestamp();
+
+      const tesoureiroRole = interaction.guild.roles.cache.find(r => r.name === 'tesoureiro');
+      const mention = tesoureiroRole ? `<@&${tesoureiroRole.id}>` : '@tesoureiro';
+
+      await logChannel.send({ 
+        content: `${mention} Nova solicitação de empréstimo!`,
+        embeds: [embed] 
+      });
+    }
+
+    await interaction.reply({
+      content: `✅ Solicitação de empréstimo de **${valor} milhões** enviada!\n⏳ Aguarde análise da staff.`,
+      ephemeral: true
+    });
+
+    console.log(`[Finance] Loan request: ${valor}M by ${interaction.user.tag}`);
+
+  } catch (error) {
+    console.error('[Finance] Error processing loan:', error);
+    await interaction.reply({
+      content: '❌ Erro ao processar empréstimo. Tente novamente.',
+      ephemeral: true
+    });
+  }
+}
+
+async function processTransfer(interaction) {
+  try {
+    const destino = interaction.fields.getTextInputValue('destino_transferencia').trim();
+    const valor = parseFloat(interaction.fields.getTextInputValue('valor_transferencia'));
+
+    if (isNaN(valor) || valor <= 0) {
+      return interaction.reply({
+        content: '❌ Valor inválido! Digite um número positivo.',
+        ephemeral: true
+      });
+    }
+
+    // Verificar se o destinatário existe (por nick)
+    const membros = await interaction.guild.members.fetch();
+    const destinatario = membros.find(m => 
+      m.nickname?.toLowerCase() === destino.toLowerCase() || 
+      m.user.username.toLowerCase() === destino.toLowerCase()
+    );
+
+    if (!destinatario) {
+      return interaction.reply({
+        content: '❌ Destinatário não encontrado! Verifique o nick.',
+        ephemeral: true
+      });
+    }
+
+    if (destinatario.id === interaction.user.id) {
+      return interaction.reply({
+        content: '❌ Você não pode transferir para si mesmo!',
+        ephemeral: true
+      });
+    }
+
+    const userId = interaction.user.id;
+    const saldoAtual = Database.getSaldo(userId);
+    const valorUnidades = valor * 1000000;
+
+    if (saldoAtual < valorUnidades) {
+      return interaction.reply({
+        content: `❌ Saldo insuficiente!\n💰 Seu saldo: ${(saldoAtual / 1000000).toFixed(2)} milhões\n💸 Valor da transferência: ${valor} milhões`,
+        ephemeral: true
+      });
+    }
+
+    // Realizar transferência
+    Database.removeSaldo(userId, valorUnidades, `Transferência para ${destino}`);
+    Database.addSaldo(destinatario.id, valorUnidades, `Transferência de ${interaction.user.username}`);
+
+    await interaction.reply({
+      content: `✅ Transferência de **${valor} milhões** para **${destino}** realizada com sucesso!`,
+      ephemeral: true
+    });
+
+    // Notificar destinatário
+    try {
+      await destinatario.send({
+        embeds: [new EmbedBuilder()
+          .setTitle('💰 Transferência Recebida!')
+          .setDescription(`Você recebeu **${valor} milhões** de ${interaction.user.username}!`)
+          .setColor(0x2ECC71)
+          .setTimestamp()
+        ]
+      });
+    } catch (e) {
+      console.log(`[Finance] Could not notify recipient ${destinatario.id}`);
+    }
+
+    console.log(`[Finance] Transfer: ${valor}M from ${interaction.user.tag} to ${destinatario.user.tag}`);
+
+  } catch (error) {
+    console.error('[Finance] Error processing transfer:', error);
+    await interaction.reply({
+      content: '❌ Erro ao processar transferência. Tente novamente.',
+      ephemeral: true
+    });
+  }
+}
+
+// ==================== HANDLERS DE ERROS ====================
+
 process.on('unhandledRejection', error => {
   console.error('❌ Unhandled promise rejection:', error);
 });
