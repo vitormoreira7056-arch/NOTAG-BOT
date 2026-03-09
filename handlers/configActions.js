@@ -6,10 +6,11 @@ const {
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
-  PermissionFlagsBits
+  PermissionFlagsBits,
+  StringSelectMenuBuilder,
+  StringSelectMenuOptionBuilder
 } = require('discord.js');
 const Database = require('../utils/database');
-const AlbionAPI = require('./albionApi');
 
 class ConfigActions {
   /**
@@ -301,17 +302,20 @@ class ConfigActions {
     }
   }
 
+  // ==================== REGISTRO DE GUILDA - NOVO FLUXO ====================
+
   static async handleRegistrarGuilda(interaction) {
     try {
       if (!(await this.checkADM(interaction))) return;
 
-      // Buscar config atual do banco para preencher placeholders
+      // Buscar config atual do banco para preencher placeholder
       const dbConfig = await Database.getGuildConfig(interaction.guild.id);
       const guildaAtual = dbConfig.guildaRegistrada;
 
+      // Modal apenas com o nome da guilda
       const modal = new ModalBuilder()
-        .setCustomId('modal_registrar_guilda')
-        .setTitle('🏰 Registrar Guilda');
+        .setCustomId('modal_registrar_guilda_nome')
+        .setTitle('🏰 Registrar Guilda - Passo 1/2');
 
       const nomeInput = new TextInputBuilder()
         .setCustomId('nome_guilda')
@@ -321,18 +325,7 @@ class ConfigActions {
         .setRequired(true)
         .setMaxLength(50);
 
-      const serverInput = new TextInputBuilder()
-        .setCustomId('server_guilda')
-        .setLabel('Servidor (americas, europe ou asia)')
-        .setPlaceholder(guildaAtual?.server || 'Ex: europe')
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true)
-        .setMaxLength(20);
-
-      modal.addComponents(
-        new ActionRowBuilder().addComponents(nomeInput),
-        new ActionRowBuilder().addComponents(serverInput)
-      );
+      modal.addComponents(new ActionRowBuilder().addComponents(nomeInput));
 
       await interaction.showModal(modal);
 
@@ -345,57 +338,183 @@ class ConfigActions {
     }
   }
 
-  static async processGuildRegistration(interaction) {
+  /**
+   * Processa o nome da guilda e mostra seleção de servidor
+   */
+  static async processGuildaNome(interaction) {
     try {
       if (!(await this.checkADM(interaction))) return;
 
       const nome = interaction.fields.getTextInputValue('nome_guilda').trim();
-      const server = interaction.fields.getTextInputValue('server_guilda').trim();
 
-      if (!nome || !server) {
+      if (!nome) {
         return interaction.reply({
-          content: '❌ Nome e servidor são obrigatórios!',
+          content: '❌ O nome da guilda é obrigatório!',
           ephemeral: true
         });
       }
 
-      // Validar servidor
-      const servidoresValidos = ['americas', 'europe', 'asia'];
-      const serverLower = server.toLowerCase();
-      if (!servidoresValidos.includes(serverLower)) {
+      // Armazenar nome temporariamente
+      if (!global.guildaRegistroTemp) global.guildaRegistroTemp = new Map();
+      global.guildaRegistroTemp.set(interaction.user.id, { nome });
+
+      // Criar menu de seleção de servidor
+      const embed = new EmbedBuilder()
+        .setTitle('🌍 Selecione o Servidor')
+        .setDescription(
+          `**Guilda:** \`${nome}\`\n\n` +
+          `Selecione o servidor onde a guilda está registrada no Albion Online:`
+        )
+        .setColor(0x3498DB)
+        .setTimestamp();
+
+      const selectMenu = new StringSelectMenuBuilder()
+        .setCustomId('select_server_guilda')
+        .setPlaceholder('🌎 Escolha o servidor...')
+        .addOptions([
+          new StringSelectMenuOptionBuilder()
+            .setLabel('Americas')
+            .setValue('americas')
+            .setDescription('Servidor das Américas (US East, US West, Brasil)')
+            .setEmoji('🌎'),
+          new StringSelectMenuOptionBuilder()
+            .setLabel('Europe')
+            .setValue('europe')
+            .setDescription('Servidor Europeu')
+            .setEmoji('🇪🇺'),
+          new StringSelectMenuOptionBuilder()
+            .setLabel('Asia')
+            .setValue('asia')
+            .setDescription('Servidor Asiático')
+            .setEmoji('🌏')
+        ]);
+
+      const row = new ActionRowBuilder().addComponents(selectMenu);
+
+      await interaction.reply({
+        embeds: [embed],
+        components: [row],
+        ephemeral: true
+      });
+
+    } catch (error) {
+      console.error(`[ConfigActions] Error processing guilda nome:`, error);
+      await interaction.reply({
+        content: '❌ Erro ao processar nome da guilda.',
+        ephemeral: true
+      });
+    }
+  }
+
+  /**
+   * Processa a seleção do servidor e verifica na API
+   */
+  static async processGuildaServerSelect(interaction) {
+    try {
+      if (!(await this.checkADM(interaction))) return;
+
+      const server = interaction.values[0];
+      const tempData = global.guildaRegistroTemp?.get(interaction.user.id);
+
+      if (!tempData || !tempData.nome) {
         return interaction.reply({
-          content: '❌ Servidor inválido! Use: americas, europe ou asia',
+          content: '❌ Dados do registro não encontrados. Comece novamente.',
           ephemeral: true
         });
       }
 
-      // 🔍 VERIFICAR SE A GUILDA EXISTE NA API DO ALBION
-      console.log(`[ConfigActions] Verificando guilda "${nome}" no servidor ${serverLower}...`);
+      const nome = tempData.nome;
 
       await interaction.deferReply({ ephemeral: true });
 
-      const guildInfo = await this.searchGuildInAPI(nome, serverLower);
+      // Verificar se a guilda existe na API
+      console.log(`[ConfigActions] Verificando guilda "${nome}" no servidor ${server}...`);
+
+      const guildInfo = await this.searchGuildInAPI(nome, server);
 
       if (!guildInfo.found) {
+        // Limpar temp
+        global.guildaRegistroTemp?.delete(interaction.user.id);
+
         return interaction.editReply({
           content: `❌ **Guilda não encontrada!**\n\n` +
-                   `Não foi possível encontrar a guilda "**${nome}**" no servidor **${serverLower}**.\n\n` +
+                   `Não foi possível encontrar a guilda "**${nome}**" no servidor **${server}**.\n\n` +
                    `**Verifique:**\n` +
                    `• O nome da guilda está escrito corretamente (exatamente como no jogo)\n` +
                    `• O servidor está correto\n` +
                    `• A guilda existe e é pública no Albion\n\n` +
-                   `Tente novamente com o nome exato da guilda.`,
+                   `Clique em "Registrar Guilda" novamente para tentar com outro nome.`,
         });
       }
 
-      // Se encontrou mas com nome diferente (case insensitive match)
+      // Se encontrou, mostrar confirmação
       const guildNameToSave = guildInfo.exactName || nome;
 
+      const embed = new EmbedBuilder()
+        .setTitle('✅ Confirmar Registro')
+        .setDescription(
+          `**Guilda encontrada na API do Albion!**\n\n` +
+          `**Nome:** \`${guildNameToSave}\`\n` +
+          `**Servidor:** \`${server}\`\n` +
+          `**ID Albion:** \`${guildInfo.guildId || 'N/A'}\`\n\n` +
+          `Deseja confirmar o registro desta guilda?`
+        )
+        .setColor(0x2ECC71)
+        .setTimestamp();
+
+      const botoes = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`confirmar_guilda_${server}_${guildNameToSave.replace(/\s+/g, '_')}`)
+          .setLabel('✅ Confirmar')
+          .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+          .setCustomId('cancelar_guilda_registro')
+          .setLabel('❌ Cancelar')
+          .setStyle(ButtonStyle.Danger)
+      );
+
+      // Atualizar temp com dados completos
+      tempData.server = server;
+      tempData.exactName = guildNameToSave;
+      tempData.guildId = guildInfo.guildId;
+      global.guildaRegistroTemp.set(interaction.user.id, tempData);
+
+      await interaction.editReply({
+        embeds: [embed],
+        components: [botoes]
+      });
+
+    } catch (error) {
+      console.error(`[ConfigActions] Error processing server select:`, error);
+      await interaction.editReply({
+        content: '❌ Erro ao processar seleção de servidor.'
+      });
+    }
+  }
+
+  /**
+   * Confirma o registro da guilda
+   */
+  static async confirmarGuildaRegistro(interaction, server, nomeGuilda) {
+    try {
+      if (!(await this.checkADM(interaction))) return;
+
+      const tempData = global.guildaRegistroTemp?.get(interaction.user.id);
+
+      if (!tempData) {
+        return interaction.reply({
+          content: '❌ Dados do registro expirados. Comece novamente.',
+          ephemeral: true
+        });
+      }
+
+      const nome = nomeGuilda.replace(/_/g, ' ');
+
       const guildaData = {
-        nome: guildNameToSave,
-        server: serverLower,
+        nome: nome,
+        server: server,
         dataRegistro: Date.now(),
-        albionGuildId: guildInfo.guildId || null,
+        albionGuildId: tempData.guildId || null,
         verified: true
       };
 
@@ -412,59 +531,63 @@ class ConfigActions {
       config.guildaRegistrada = guildaData;
       global.guildConfig.set(interaction.guild.id, config);
 
+      // Limpar temp
+      global.guildaRegistroTemp?.delete(interaction.user.id);
+
       const embed = new EmbedBuilder()
         .setTitle('✅ GUILDA REGISTRADA COM SUCESSO')
         .setDescription(
-          `**Nome:** ${guildNameToSave}\n` +
-          `**Servidor:** ${serverLower}\n` +
-          `**ID Albion:** ${guildInfo.guildId || 'N/A'}\n` +
+          `**Nome:** ${nome}\n` +
+          `**Servidor:** ${server}\n` +
+          `**ID Albion:** ${tempData.guildId || 'N/A'}\n` +
           `**Registrado em:** ${new Date().toLocaleDateString('pt-BR')}\n\n` +
           `✅ A guilda foi verificada na API do Albion e salva no banco de dados!`
         )
         .setColor(0x2ECC71)
         .setTimestamp();
 
-      await interaction.editReply({
-        embeds: [embed]
+      await interaction.update({
+        embeds: [embed],
+        components: []
       });
 
-      console.log(`[ConfigActions] Guild registered and verified: ${guildNameToSave} on ${serverLower}`);
+      console.log(`[ConfigActions] Guild registered: ${nome} on ${server}`);
 
     } catch (error) {
-      console.error(`[ConfigActions] Error registering guild:`, error);
+      console.error(`[ConfigActions] Error confirming guild registration:`, error);
+      await interaction.reply({
+        content: '❌ Erro ao confirmar registro da guilda.',
+        ephemeral: true
+      });
+    }
+  }
 
-      // Se já deferiu, usa editReply, senão usa reply
-      if (interaction.deferred) {
-        await interaction.editReply({
-          content: '❌ Erro ao registrar guilda. Tente novamente mais tarde.'
-        });
-      } else {
-        await interaction.reply({
-          content: '❌ Erro ao registrar guilda.',
-          ephemeral: true
-        });
-      }
+  /**
+   * Cancela o registro da guilda
+   */
+  static async cancelarGuildaRegistro(interaction) {
+    try {
+      global.guildaRegistroTemp?.delete(interaction.user.id);
+
+      await interaction.update({
+        content: '❌ Registro cancelado.',
+        embeds: [],
+        components: []
+      });
+
+    } catch (error) {
+      console.error(`[ConfigActions] Error canceling guild registration:`, error);
     }
   }
 
   /**
    * Busca uma guilda na API do Albion Online
-   * @param {string} guildName - Nome da guilda
-   * @param {string} server - Servidor (americas, europe, asia)
-   * @returns {Object} - {found: boolean, exactName: string, guildId: string}
    */
   static async searchGuildInAPI(guildName, server) {
     try {
       const https = require('https');
 
-      // Mapear servidor para o formato da API
-      const serverMap = {
-        'americas': 'gameinfo.albiononline.com',
-        'europe': 'gameinfo.albiononline.com',
-        'asia': 'gameinfo.albiononline.com'
-      };
-
-      const baseUrl = serverMap[server] || 'gameinfo.albiononline.com';
+      const baseUrl = 'gameinfo.albiononline.com';
       const encodedName = encodeURIComponent(guildName);
 
       console.log(`[AlbionAPI] Searching guild: "${guildName}" on ${server}`);
@@ -521,7 +644,7 @@ class ConfigActions {
                 return;
               }
 
-              // Se não achou exato, verifica se algum resultado é muito similar
+              // Se não achou exato, verifica similaridade
               const similarMatch = guilds.find(g => 
                 g.Name && (
                   g.Name.toLowerCase().includes(guildName.toLowerCase()) ||
@@ -539,7 +662,7 @@ class ConfigActions {
                 return;
               }
 
-              // Se não achou nada similar, retorna o primeiro (pode ser uma busca parcial)
+              // Retorna o primeiro resultado
               console.log(`[AlbionAPI] Using first result: ${guilds[0].Name}`);
               resolve({
                 found: true,
