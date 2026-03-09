@@ -28,6 +28,7 @@ const PerfilHandler = require('./handlers/perfilHandler');
 const OrbHandler = require('./handlers/orbHandler');
 const XpHandler = require('./handlers/xpHandler');
 const XpEventHandler = require('./handlers/xpEventHandler');
+const RaidAvalonHandler = require('./handlers/raidAvalonHandler'); // NOVO
 
 // Criar cliente
 const client = new Client({
@@ -76,6 +77,8 @@ global.pendingLoans = new Map();
 global.pendingTransfers = new Map();
 global.pendingOrbDeposits = new Map();
 global.activeXpEvents = new Map();
+global.activeRaids = new Map(); // NOVO - Raids Avalon ativas
+global.raidTemp = new Map(); // NOVO - Dados temporários de raid
 global.client = client;
 
 // Carregar dados persistidos (blacklist e histórico)
@@ -150,8 +153,8 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     const member = newState.member;
     const channel = newState.channel;
 
-    // Verificar se é um canal de evento (começa com ⚔️-)
-    if (!channel.name.startsWith('⚔️-')) return;
+    // Verificar se é um canal de evento (começa com ⚔️- ou 🏰-)
+    if (!channel.name.startsWith('⚔️-') && !channel.name.startsWith('🏰-')) return;
 
     // Verificar se o usuário está em algum evento ativo
     let isParticipating = false;
@@ -163,6 +166,20 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
         eventData = event;
         if (event.participantes.has(member.id)) {
           isParticipating = true;
+        }
+        break;
+      }
+    }
+
+    // Verificar em raids ativas também
+    for (const [raidId, raid] of global.activeRaids || []) {
+      if (raid.canalVozId === channel.id) {
+        // Verificar se está em alguma classe
+        for (const classe of Object.values(raid.classes || {})) {
+          if (classe.participantes?.find(p => p.userId === member.id)) {
+            isParticipating = true;
+            break;
+          }
         }
         break;
       }
@@ -328,11 +345,49 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      if (customId === 'btn_raid_avalon' || customId === 'btn_gank' || customId === 'btn_cta') {
+      // RAID AVALON - ATIVADO!
+      if (customId === 'btn_raid_avalon') {
+        const modal = EventPanel.createRaidAvalonModal();
+        await interaction.showModal(modal);
+        return;
+      }
+
+      if (customId === 'btn_gank' || customId === 'btn_cta') {
         await interaction.reply({
           content: '🔒 Este recurso estará disponível em breve!',
           ephemeral: true
         });
+        return;
+      }
+
+      // RAID AVALON - Configuração de classes
+      if (customId.startsWith('raid_config_')) {
+        const action = customId.replace('raid_config_', '');
+
+        if (action === 'finalizar') {
+          await RaidAvalonHandler.createRaid(interaction);
+        } else {
+          await RaidAvalonHandler.showClassLimitModal(interaction, action);
+        }
+        return;
+      }
+
+      // RAID AVALON - Botões de controle
+      if (customId.startsWith('raid_iniciar_')) {
+        const raidId = customId.replace('raid_iniciar_', '');
+        await RaidAvalonHandler.handleIniciar(interaction, raidId);
+        return;
+      }
+
+      if (customId.startsWith('raid_finalizar_')) {
+        const raidId = customId.replace('raid_finalizar_', '');
+        await RaidAvalonHandler.handleFinalizar(interaction, raidId);
+        return;
+      }
+
+      if (customId.startsWith('raid_cancelar_')) {
+        const raidId = customId.replace('raid_cancelar_', '');
+        await RaidAvalonHandler.handleCancelar(interaction, raidId);
         return;
       }
 
@@ -746,6 +801,24 @@ client.on(Events.InteractionCreate, async interaction => {
         await MemberListPanel.handleSortSelect(interaction);
         return;
       }
+
+      // RAID AVALON - Seleção de classe
+      if (interaction.customId.startsWith('raid_select_class_')) {
+        const raidId = interaction.customId.replace('raid_select_class_', '');
+        const classKey = interaction.values[0];
+        await RaidAvalonHandler.showWeaponSelect(interaction, raidId, classKey);
+        return;
+      }
+
+      // RAID AVALON - Seleção de arma
+      if (interaction.customId.startsWith('raid_select_weapon_')) {
+        const parts = interaction.customId.replace('raid_select_weapon_', '').split('_');
+        const raidId = parts[0] + '_' + parts[1] + '_' + parts[2];
+        const classKey = parts[3];
+        const weaponKey = interaction.values[0];
+        await RaidAvalonHandler.processWeaponSelect(interaction, raidId, classKey, weaponKey);
+        return;
+      }
     }
 
     // ==================== USER SELECT MENUS ====================
@@ -807,6 +880,41 @@ client.on(Events.InteractionCreate, async interaction => {
       // SISTEMA DE EVENTOS
       if (interaction.customId === 'modal_criar_evento') {
         await EventHandler.createEvent(interaction);
+        return;
+      }
+
+      // RAID AVALON - Modal inicial
+      if (interaction.customId === 'modal_raid_avalon') {
+        try {
+          const nome = interaction.fields.getTextInputValue('raid_nome');
+          const descricao = interaction.fields.getTextInputValue('raid_descricao');
+          const horario = interaction.fields.getTextInputValue('raid_horario');
+          const limite = parseInt(interaction.fields.getTextInputValue('raid_limite')) || 0;
+
+          const raidData = {
+            nome: nome,
+            descricao: descricao,
+            horario: horario,
+            limiteTotal: limite,
+            classes: {}
+          };
+
+          await RaidAvalonHandler.showClassConfigModal(interaction, raidData);
+          return;
+        } catch (error) {
+          console.error('[Index] Error processing raid modal:', error);
+          await interaction.reply({
+            content: '❌ Erro ao processar formulário da raid.',
+            ephemeral: true
+          });
+          return;
+        }
+      }
+
+      // RAID AVALON - Limite de classe
+      if (interaction.customId.startsWith('raid_limit_')) {
+        const classKey = interaction.customId.replace('raid_limit_', '');
+        await RaidAvalonHandler.processClassLimit(interaction, classKey);
         return;
       }
 

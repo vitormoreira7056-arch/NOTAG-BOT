@@ -23,15 +23,15 @@ class EventPanel {
         '4️⃣ Membros podem participar clicando no botão\n\n' +
         '**Tipos de Eventos:**\n' +
         '📋 **Evento Customizado** - Crie do zero\n' +
-        '🏰 **Raid Avalon** - Em breve\n' +
+        '🏰 **Raid Avalon** - Evento organizado por classes\n' +
         '⚔️ **Gank** - Em breve\n' +
         '📢 **CTA** - Em breve'
       )
       .setColor(0x2C3E50)
-      .setImage('https://i.imgur.com/8N7Wf5g.png') // Banner opcional
-      .setFooter({ 
-        text: 'Sistema de Eventos • NOTAG Bot', 
-        iconURL: 'https://i.imgur.com/JR7K1xC.png' 
+      // IMAGEM REMOVIDA DAQUI
+      .setFooter({
+        text: 'Sistema de Eventos • NOTAG Bot',
+        iconURL: 'https://i.imgur.com/JR7K1xC.png'
       })
       .setTimestamp();
   }
@@ -48,7 +48,7 @@ class EventPanel {
         .setCustomId('btn_raid_avalon')
         .setLabel('🏰 Raid Avalon')
         .setStyle(ButtonStyle.Primary)
-        .setDisabled(true),
+        .setDisabled(false), // ATIVADO!
 
       new ButtonBuilder()
         .setCustomId('btn_gank')
@@ -106,6 +106,53 @@ class EventPanel {
     const row2 = new ActionRowBuilder().addComponents(descInput);
     const row3 = new ActionRowBuilder().addComponents(reqInput);
     const row4 = new ActionRowBuilder().addComponents(horarioInput);
+
+    modal.addComponents(row1, row2, row3, row4);
+    return modal;
+  }
+
+  // Criar modal de Raid Avalon
+  static createRaidAvalonModal() {
+    const modal = new ModalBuilder()
+      .setCustomId('modal_raid_avalon')
+      .setTitle('🏰 Criar Raid Avalon');
+
+    const nomeInput = new TextInputBuilder()
+      .setCustomId('raid_nome')
+      .setLabel('📛 Nome do Evento')
+      .setPlaceholder('Ex: Raid Avalon T8 - Sala 1')
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true)
+      .setMaxLength(50);
+
+    const descInput = new TextInputBuilder()
+      .setCustomId('raid_descricao')
+      .setLabel('📝 Descrição')
+      .setPlaceholder('Ex: Raid em Avalon T8, trazer sets de combate...')
+      .setStyle(TextInputStyle.Paragraph)
+      .setRequired(true)
+      .setMaxLength(500);
+
+    const horarioInput = new TextInputBuilder()
+      .setCustomId('raid_horario')
+      .setLabel('🕐 Horário')
+      .setPlaceholder('Ex: 21:00 (Horário de Brasília)')
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true)
+      .setMaxLength(30);
+
+    const limiteInput = new TextInputBuilder()
+      .setCustomId('raid_limite')
+      .setLabel('👥 Limite Total de Participantes')
+      .setPlaceholder('Ex: 20 (deixe em branco para sem limite)')
+      .setStyle(TextInputStyle.Short)
+      .setRequired(false)
+      .setMaxLength(3);
+
+    const row1 = new ActionRowBuilder().addComponents(nomeInput);
+    const row2 = new ActionRowBuilder().addComponents(descInput);
+    const row3 = new ActionRowBuilder().addComponents(horarioInput);
+    const row4 = new ActionRowBuilder().addComponents(limiteInput);
 
     modal.addComponents(row1, row2, row3, row4);
     return modal;

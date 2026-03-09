@@ -33,6 +33,7 @@ class DatabaseManager {
       this.db.allAsync = promisify(this.db.all.bind(this.db));
 
       await this.createTables();
+      await this.migrateSchema(); // NOVO: Migração de schema
       await this.migrateFromJSON();
 
       this.initialized = true;
@@ -212,6 +213,47 @@ class DatabaseManager {
     await this.db.runAsync(`CREATE INDEX IF NOT EXISTS idx_guild_config ON guild_config(guild_id)`);
   }
 
+  /**
+   * NOVO: Migração de schema para adicionar colunas que possam estar faltando
+   */
+  async migrateSchema() {
+    try {
+      console.log('[Database] Checking schema migrations...');
+
+      // Verificar e adicionar colunas na tabela guild_config se necessário
+      const tableInfo = await this.db.allAsync(`PRAGMA table_info(guild_config)`);
+      const existingColumns = tableInfo.map(col => col.name);
+
+      console.log(`[Database] Existing columns in guild_config: ${existingColumns.join(', ')}`);
+
+      // Mapeamento de colunas que devem existir
+      const requiredColumns = {
+        'guilda_nome': 'TEXT',
+        'guilda_server': 'TEXT',
+        'guilda_registrada_em': 'INTEGER',
+        'xp_ativo': 'INTEGER DEFAULT 0',
+        'taxas_bau': 'TEXT DEFAULT \'{"royal": 10, "black": 15, "brecilien": 12, "avalon": 20}\'',
+        'taxa_emprestimo': 'INTEGER DEFAULT 5'
+      };
+
+      for (const [columnName, columnType] of Object.entries(requiredColumns)) {
+        if (!existingColumns.includes(columnName)) {
+          console.log(`[Database] Adding missing column: ${columnName}`);
+          try {
+            await this.db.runAsync(`ALTER TABLE guild_config ADD COLUMN ${columnName} ${columnType}`);
+            console.log(`[Database] Column ${columnName} added successfully`);
+          } catch (alterError) {
+            console.error(`[Database] Error adding column ${columnName}:`, alterError);
+          }
+        }
+      }
+
+      console.log('[Database] Schema migration completed');
+    } catch (error) {
+      console.error('[Database] Error during schema migration:', error);
+    }
+  }
+
   // ==================== GUILD CONFIG (NOVO) ====================
 
   async getGuildConfig(guildId) {
@@ -260,7 +302,7 @@ class DatabaseManager {
       const fieldMap = {
         idioma: 'idioma',
         taxaGuilda: 'taxa_guilda',
-        guildaRegistrada: null,
+        guildaRegistrada: null, // tratado separadamente
         xpAtivo: 'xp_ativo',
         taxasBau: 'taxas_bau',
         taxaEmprestimo: 'taxa_emprestimo'
@@ -369,7 +411,7 @@ class DatabaseManager {
     const id = transaction.id || `txn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
     await this.db.runAsync(`
-      INSERT INTO transactions
+      INSERT INTO transactions 
       (id, type, user_id, amount, reason, guild_id, event_id, approved_by, approved_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [

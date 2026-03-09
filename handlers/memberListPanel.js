@@ -11,9 +11,65 @@ const Database = require('../utils/database');
 
 /**
  * Handler do Painel de Lista de Membros - Versão Moderna
+ * CORREÇÕES:
+ * - Adicionado delay entre requisições para evitar rate limit
+ * - Cache de membros para reduzir chamadas à API
+ * - Tratamento de erro aprimorado para GatewayRateLimitError
  */
 class MemberListPanel {
   static activePages = new Map(); // Cache de páginas ativas por guilda
+  static memberCache = new Map(); // Cache de membros por guilda
+  static lastFetch = new Map(); // Timestamp da última busca
+
+  /**
+   * Delay helper para evitar rate limit
+   */
+  static async delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Busca membros com cache e rate limit protection
+   */
+  static async fetchMembersWithCache(guild, forceRefresh = false) {
+    try {
+      const now = Date.now();
+      const lastFetch = this.lastFetch.get(guild.id) || 0;
+      const cache = this.memberCache.get(guild.id);
+
+      // Usar cache se tiver menos de 5 minutos e não forçar refresh
+      if (!forceRefresh && cache && (now - lastFetch) < 5 * 60 * 1000) {
+        console.log(`[MemberList] Using cached members for guild ${guild.id}`);
+        return cache;
+      }
+
+      console.log(`[MemberList] Fetching fresh members for guild ${guild.id}`);
+
+      // Buscar em batches para evitar rate limit
+      let allMembers;
+      try {
+        // Tentar buscar todos de uma vez primeiro
+        allMembers = await guild.members.fetch();
+        await this.delay(500); // Delay após fetch
+      } catch (fetchError) {
+        if (fetchError.message?.includes('rate limit') || fetchError.code === 429) {
+          console.warn(`[MemberList] Rate limit hit, using cache`);
+          return guild.members.cache;
+        }
+        throw fetchError;
+      }
+
+      // Atualizar cache
+      this.memberCache.set(guild.id, allMembers);
+      this.lastFetch.set(guild.id, now);
+
+      return allMembers;
+    } catch (error) {
+      console.error(`[MemberList] Error fetching members:`, error);
+      // Fallback para cache do Discord.js
+      return guild.members.cache;
+    }
+  }
 
   /**
    * Cria e envia o painel de lista de membros
@@ -28,9 +84,9 @@ class MemberListPanel {
       const embed = await this.createModernEmbed(guild);
       const components = this.createModernComponents();
 
-      const message = await channel.send({ 
-        embeds: [embed], 
-        components: components 
+      const message = await channel.send({
+        embeds: [embed],
+        components: components
       });
 
       console.log(`[MemberList] Painel moderno enviado em #${channel.name}`);
@@ -54,13 +110,8 @@ class MemberListPanel {
    */
   static async createModernEmbed(guild) {
     try {
-      // Buscar membros com cache
-      let members;
-      try {
-        members = await guild.members.fetch();
-      } catch (e) {
-        members = guild.members.cache;
-      }
+      // Buscar membros com cache e delay
+      let members = await this.fetchMembersWithCache(guild);
 
       // Estatísticas básicas
       const totalMembers = members.size;
@@ -69,10 +120,16 @@ class MemberListPanel {
       const dnd = members.filter(m => m.presence?.status === 'dnd').size;
       const offline = totalMembers - online - idle - dnd;
 
-      // Contagem por cargos principais
+      // Contagem por cargos principais (com delay entre operações pesadas)
       const membros = members.filter(m => m.roles.cache.some(r => r.name === 'Membro')).size;
+      await this.delay(100);
+
       const aliancas = members.filter(m => m.roles.cache.some(r => r.name === 'Aliança')).size;
+      await this.delay(100);
+
       const convidados = members.filter(m => m.roles.cache.some(r => r.name === 'Convidado')).size;
+      await this.delay(100);
+
       const staff = members.filter(m => m.roles.cache.some(r => ['Staff', 'Staffer'].includes(r.name))).size;
       const adms = members.filter(m => m.roles.cache.some(r => r.name === 'ADM')).size;
       const recrutadores = members.filter(m => m.roles.cache.some(r => ['Recrutador', 'Recrutadora'].includes(r.name))).size;
@@ -114,7 +171,7 @@ class MemberListPanel {
         .addFields(
           {
             name: '⚔️ Estrutura da Guilda',
-            value: 
+            value:
               `🎖️ **Membros:** \`${membros}\`\n` +
               `🤝 **Alianças:** \`${aliancas}\`\n` +
               `🎫 **Convidados:** \`${convidados}\`\n` +
@@ -124,15 +181,15 @@ class MemberListPanel {
           },
           {
             name: `🆕 Novos (7 dias) - ${novosMembros.size}`,
-            value: novosMembros.size > 0 
+            value: novosMembros.size > 0
               ? novosNomes.join(', ') + (novosMembros.size > 5 ? `\n*e mais ${novosMembros.size - 5}...*` : '')
               : '*Nenhum novo membro esta semana*',
             inline: false
           }
         )
-        .setFooter({ 
-          text: 'Use os menus abaixo para filtrar e navegar • Atualizado', 
-          iconURL: guild.iconURL({ dynamic: true }) 
+        .setFooter({
+          text: 'Use os menus abaixo para filtrar e navegar • Atualizado',
+          iconURL: guild.iconURL({ dynamic: true })
         })
         .setTimestamp();
 
@@ -289,13 +346,13 @@ class MemberListPanel {
       cache.filter = filter;
       this.activePages.set(guild.id, cache);
 
-      // Buscar membros conforme filtro
-      let members = await guild.members.fetch();
+      // Buscar membros com cache
+      let members = await this.fetchMembersWithCache(guild);
 
       if (filter === 'online') {
         members = members.filter(m => m.presence && m.presence.status !== 'offline');
       } else if (filter === 'staff') {
-        members = members.filter(m => m.roles.cache.some(r => 
+        members = members.filter(m => m.roles.cache.some(r =>
           ['Staff', 'Staffer', 'ADM'].includes(r.name)
         ));
       } else if (filter !== 'all') {
@@ -331,7 +388,7 @@ class MemberListPanel {
       const sortBy = interaction.values[0];
       const guild = interaction.guild;
 
-      let members = Array.from((await guild.members.fetch()).values());
+      let members = Array.from((await this.fetchMembersWithCache(guild)).values());
 
       // Ordenar conforme critério
       switch(sortBy) {
@@ -383,105 +440,114 @@ class MemberListPanel {
    * Mostra página de membros
    */
   static async showMemberPage(interaction, members, page, totalPages, filter, sortBy = 'recent') {
-    const pageSize = 10;
-    const start = (page - 1) * pageSize;
-    const end = start + pageSize;
-    const pageMembers = members.slice(start, end);
+    try {
+      const pageSize = 10;
+      const start = (page - 1) * pageSize;
+      const end = start + pageSize;
+      const pageMembers = members.slice(start, end);
 
-    // Buscar dados do banco para esses membros
-    const memberData = [];
-    for (const member of pageMembers) {
-      try {
-        const userData = await Database.getUser(member.id);
-        memberData.push({
-          member,
-          level: userData?.level || 1,
-          events: userData?.eventosParticipados || 0,
-          joinedAt: member.joinedAt || new Date()
-        });
-      } catch (e) {
-        memberData.push({
-          member,
-          level: 1,
-          events: 0,
-          joinedAt: member.joinedAt || new Date()
-        });
+      // Buscar dados do banco para esses membros (com delay)
+      const memberData = [];
+      for (const member of pageMembers) {
+        try {
+          const userData = await Database.getUser(member.id);
+          memberData.push({
+            member,
+            level: userData?.level || 1,
+            events: userData?.eventosParticipados || 0,
+            joinedAt: member.joinedAt || new Date()
+          });
+          // Delay entre requisições ao banco
+          await this.delay(50);
+        } catch (e) {
+          memberData.push({
+            member,
+            level: 1,
+            events: 0,
+            joinedAt: member.joinedAt || new Date()
+          });
+        }
       }
+
+      const filterNames = {
+        'all': 'Todos',
+        'Membro': 'Membros Guilda',
+        'Aliança': 'Alianças',
+        'Convidado': 'Convidados',
+        'staff': 'Staff & ADMs',
+        'online': 'Online'
+      };
+
+      // Criar lista formatada
+      let description = '';
+      for (const data of memberData) {
+        const status = data.member.presence?.status || 'offline';
+        const statusEmoji = {
+          'online': '🟢',
+          'idle': '🌙',
+          'dnd': '⛔',
+          'offline': '⚪'
+        }[status] || '⚪';
+
+        const roles = data.member.roles.cache
+          .filter(r => r.name !== '@everyone')
+          .map(r => r.name)
+          .slice(0, 2)
+          .join(', ');
+
+        description += `${statusEmoji} **${data.member.displayName}** (Nv.${data.level})\n`;
+        description += `├ 🎮 ${data.events} eventos • 📅 ${data.joinedAt.toLocaleDateString('pt-BR')}\n`;
+        description += `└ 🏷️ ${roles || 'Sem cargo'}\n\n`;
+      }
+
+      if (description.length > 4000) {
+        description = description.substring(0, 3990) + '...';
+      }
+
+      const embed = new EmbedBuilder()
+        .setTitle(`📋 Lista de Membros - ${filterNames[filter] || filter}`)
+        .setDescription(
+          `Página ${page}/${totalPages} • Total: ${members.length} membros\n` +
+          `Ordenado por: ${sortBy}\n\n` +
+          description
+        )
+        .setColor(0x3498DB)
+        .setTimestamp();
+
+      // Atualizar botões de navegação
+      const components = [
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`btn_mlist_page_prev_${page}_${filter}_${sortBy}`)
+            .setLabel('◀️ Anterior')
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(page <= 1),
+          new ButtonBuilder()
+            .setCustomId(`btn_mlist_page_info`)
+            .setLabel(`${page}/${totalPages}`)
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(true),
+          new ButtonBuilder()
+            .setCustomId(`btn_mlist_page_next_${page}_${filter}_${sortBy}`)
+            .setLabel('Próxima ▶️')
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(page >= totalPages),
+          new ButtonBuilder()
+            .setCustomId('btn_mlist_voltar_resumo')
+            .setLabel('📊 Voltar ao Resumo')
+            .setStyle(ButtonStyle.Primary)
+        )
+      ];
+
+      await interaction.editReply({ embeds: [embed], components });
+    } catch (error) {
+      console.error('[MemberList] Erro ao mostrar página:', error);
+      await interaction.editReply({
+        content: '❌ Erro ao carregar página de membros.',
+        embeds: [],
+        components: []
+      });
     }
-
-    const filterNames = {
-      'all': 'Todos',
-      'Membro': 'Membros Guilda',
-      'Aliança': 'Alianças',
-      'Convidado': 'Convidados',
-      'staff': 'Staff & ADMs',
-      'online': 'Online'
-    };
-
-    const embed = new EmbedBuilder()
-      .setTitle(`📋 Lista de Membros - ${filterNames[filter] || filter}`)
-      .setDescription(`Página ${page}/${totalPages} • Total: ${members.length} membros\nOrdenado por: ${sortBy}`)
-      .setColor(0x3498DB)
-      .setTimestamp();
-
-    // Criar lista formatada
-    let description = '';
-    for (const data of memberData) {
-      const status = data.member.presence?.status || 'offline';
-      const statusEmoji = {
-        'online': '🟢',
-        'idle': '🌙',
-        'dnd': '⛔',
-        'offline': '⚪'
-      }[status] || '⚪';
-
-      const roles = data.member.roles.cache
-        .filter(r => r.name !== '@everyone')
-        .map(r => r.name)
-        .slice(0, 2)
-        .join(', ');
-
-      description += `${statusEmoji} **${data.member.displayName}** (Nv.${data.level})\n`;
-      description += `├ 🎮 ${data.events} eventos • 📅 ${data.joinedAt.toLocaleDateString('pt-BR')}\n`;
-      description += `└ 🏷️ ${roles || 'Sem cargo'}\n\n`;
-    }
-
-    if (description.length > 4000) {
-      description = description.substring(0, 3990) + '...';
-    }
-
-    embed.setDescription(
-      `Página ${page}/${totalPages} • Total: ${members.length} membros\n` +
-      `Ordenado por: ${sortBy}\n\n` +
-      description
-    );
-
-    // Atualizar botões de navegação
-    const components = [
-      new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId(`btn_mlist_page_prev_${page}_${filter}_${sortBy}`)
-          .setLabel('◀️ Anterior')
-          .setStyle(ButtonStyle.Secondary)
-          .setDisabled(page <= 1),
-        new ButtonBuilder()
-          .setCustomId(`btn_mlist_page_info`)
-          .setLabel(`${page}/${totalPages}`)
-          .setStyle(ButtonStyle.Secondary)
-          .setDisabled(true),
-        new ButtonBuilder()
-          .setCustomId(`btn_mlist_page_next_${page}_${filter}_${sortBy}`)
-          .setLabel('Próxima ▶️')
-          .setStyle(ButtonStyle.Secondary)
-          .setDisabled(page >= totalPages),
-        new ButtonBuilder()
-          .setCustomId('btn_mlist_voltar_resumo')
-          .setLabel('📊 Voltar ao Resumo')
-          .setStyle(ButtonStyle.Primary)
-      )
-    ];
-
-    await interaction.editReply({ embeds: [embed], components });
   }
 
   /**
@@ -498,13 +564,13 @@ class MemberListPanel {
 
       const newPage = direction === 'next' ? currentPage + 1 : currentPage - 1;
 
-      let members = Array.from((await interaction.guild.members.fetch()).values());
+      let members = Array.from((await this.fetchMembersWithCache(interaction.guild)).values());
 
       // Aplicar filtro
       if (filter === 'online') {
         members = members.filter(m => m.presence && m.presence.status !== 'offline');
       } else if (filter === 'staff') {
-        members = members.filter(m => m.roles.cache.some(r => 
+        members = members.filter(m => m.roles.cache.some(r =>
           ['Staff', 'Staffer', 'ADM'].includes(r.name)
         ));
       } else if (filter !== 'all') {
@@ -539,6 +605,7 @@ class MemberListPanel {
     try {
       await interaction.deferUpdate();
 
+      // Forçar refresh do cache
       const embed = await this.createModernEmbed(interaction.guild);
       const components = this.createModernComponents();
 
@@ -561,7 +628,7 @@ class MemberListPanel {
       await interaction.deferReply({ ephemeral: true });
 
       const guild = interaction.guild;
-      const members = await guild.members.fetch();
+      const members = await this.fetchMembersWithCache(guild);
 
       // Análise detalhada
       const hoje = new Date();
@@ -613,7 +680,7 @@ class MemberListPanel {
       await interaction.deferReply({ ephemeral: true });
 
       const guild = interaction.guild;
-      const members = await guild.members.fetch();
+      const members = await this.fetchMembersWithCache(guild);
 
       // Criar dados CSV
       let csv = 'ID,Nome,Cargos,Entrada,Status\n';
@@ -628,6 +695,11 @@ class MemberListPanel {
         const status = member.presence?.status || 'offline';
 
         csv += `${id},"${member.displayName}","${roles}","${joined}",${status}\n`;
+
+        // Delay a cada 100 membros para não sobrecarregar
+        if (members.size % 100 === 0) {
+          await this.delay(100);
+        }
       }
 
       // Criar arquivo temporário

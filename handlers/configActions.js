@@ -9,6 +9,7 @@ const {
   PermissionFlagsBits
 } = require('discord.js');
 const Database = require('../utils/database');
+const AlbionAPI = require('./albionApi');
 
 class ConfigActions {
   /**
@@ -314,7 +315,7 @@ class ConfigActions {
 
       const nomeInput = new TextInputBuilder()
         .setCustomId('nome_guilda')
-        .setLabel('Nome da Guilda')
+        .setLabel('Nome da Guilda (exatamente como no Albion)')
         .setPlaceholder(guildaAtual?.nome || 'Ex: NOTAG')
         .setStyle(TextInputStyle.Short)
         .setRequired(true)
@@ -360,17 +361,42 @@ class ConfigActions {
 
       // Validar servidor
       const servidoresValidos = ['americas', 'europe', 'asia'];
-      if (!servidoresValidos.includes(server.toLowerCase())) {
+      const serverLower = server.toLowerCase();
+      if (!servidoresValidos.includes(serverLower)) {
         return interaction.reply({
           content: '❌ Servidor inválido! Use: americas, europe ou asia',
           ephemeral: true
         });
       }
 
+      // 🔍 VERIFICAR SE A GUILDA EXISTE NA API DO ALBION
+      console.log(`[ConfigActions] Verificando guilda "${nome}" no servidor ${serverLower}...`);
+
+      await interaction.deferReply({ ephemeral: true });
+
+      const guildInfo = await this.searchGuildInAPI(nome, serverLower);
+
+      if (!guildInfo.found) {
+        return interaction.editReply({
+          content: `❌ **Guilda não encontrada!**\n\n` +
+                   `Não foi possível encontrar a guilda "**${nome}**" no servidor **${serverLower}**.\n\n` +
+                   `**Verifique:**\n` +
+                   `• O nome da guilda está escrito corretamente (exatamente como no jogo)\n` +
+                   `• O servidor está correto\n` +
+                   `• A guilda existe e é pública no Albion\n\n` +
+                   `Tente novamente com o nome exato da guilda.`,
+        });
+      }
+
+      // Se encontrou mas com nome diferente (case insensitive match)
+      const guildNameToSave = guildInfo.exactName || nome;
+
       const guildaData = {
-        nome: nome,
-        server: server.toLowerCase(),
-        dataRegistro: Date.now()
+        nome: guildNameToSave,
+        server: serverLower,
+        dataRegistro: Date.now(),
+        albionGuildId: guildInfo.guildId || null,
+        verified: true
       };
 
       // Salvar no banco de dados
@@ -389,27 +415,162 @@ class ConfigActions {
       const embed = new EmbedBuilder()
         .setTitle('✅ GUILDA REGISTRADA COM SUCESSO')
         .setDescription(
-          `**Nome:** ${nome}\n` +
-          `**Servidor:** ${server}\n` +
+          `**Nome:** ${guildNameToSave}\n` +
+          `**Servidor:** ${serverLower}\n` +
+          `**ID Albion:** ${guildInfo.guildId || 'N/A'}\n` +
           `**Registrado em:** ${new Date().toLocaleDateString('pt-BR')}\n\n` +
-          `✅ A guilda foi salva no banco de dados e persistirá mesmo após reiniciar o bot!`
+          `✅ A guilda foi verificada na API do Albion e salva no banco de dados!`
         )
         .setColor(0x2ECC71)
         .setTimestamp();
 
-      await interaction.reply({
-        embeds: [embed],
-        ephemeral: true
+      await interaction.editReply({
+        embeds: [embed]
       });
 
-      console.log(`[ConfigActions] Guild registered: ${nome} on ${server}`);
+      console.log(`[ConfigActions] Guild registered and verified: ${guildNameToSave} on ${serverLower}`);
 
     } catch (error) {
       console.error(`[ConfigActions] Error registering guild:`, error);
-      await interaction.reply({
-        content: '❌ Erro ao registrar guilda.',
-        ephemeral: true
+
+      // Se já deferiu, usa editReply, senão usa reply
+      if (interaction.deferred) {
+        await interaction.editReply({
+          content: '❌ Erro ao registrar guilda. Tente novamente mais tarde.'
+        });
+      } else {
+        await interaction.reply({
+          content: '❌ Erro ao registrar guilda.',
+          ephemeral: true
+        });
+      }
+    }
+  }
+
+  /**
+   * Busca uma guilda na API do Albion Online
+   * @param {string} guildName - Nome da guilda
+   * @param {string} server - Servidor (americas, europe, asia)
+   * @returns {Object} - {found: boolean, exactName: string, guildId: string}
+   */
+  static async searchGuildInAPI(guildName, server) {
+    try {
+      const https = require('https');
+
+      // Mapear servidor para o formato da API
+      const serverMap = {
+        'americas': 'gameinfo.albiononline.com',
+        'europe': 'gameinfo.albiononline.com',
+        'asia': 'gameinfo.albiononline.com'
+      };
+
+      const baseUrl = serverMap[server] || 'gameinfo.albiononline.com';
+      const encodedName = encodeURIComponent(guildName);
+
+      console.log(`[AlbionAPI] Searching guild: "${guildName}" on ${server}`);
+
+      return new Promise((resolve) => {
+        const options = {
+          hostname: baseUrl,
+          path: `/api/gameinfo/search?q=${encodedName}`,
+          method: 'GET',
+          headers: {
+            'Accept': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+          },
+          timeout: 10000
+        };
+
+        const req = https.request(options, (res) => {
+          let data = '';
+
+          res.on('data', (chunk) => {
+            data += chunk;
+          });
+
+          res.on('end', () => {
+            try {
+              if (!data || data.trim() === '') {
+                console.log('[AlbionAPI] Empty response');
+                resolve({ found: false });
+                return;
+              }
+
+              const jsonData = JSON.parse(data);
+              const guilds = jsonData.guilds || [];
+
+              console.log(`[AlbionAPI] Found ${guilds.length} guilds`);
+
+              if (guilds.length === 0) {
+                resolve({ found: false });
+                return;
+              }
+
+              // Buscar match exato (case insensitive)
+              const exactMatch = guilds.find(g => 
+                g.Name && g.Name.toLowerCase() === guildName.toLowerCase()
+              );
+
+              if (exactMatch) {
+                console.log(`[AlbionAPI] Exact match found: ${exactMatch.Name}`);
+                resolve({
+                  found: true,
+                  exactName: exactMatch.Name,
+                  guildId: exactMatch.Id
+                });
+                return;
+              }
+
+              // Se não achou exato, verifica se algum resultado é muito similar
+              const similarMatch = guilds.find(g => 
+                g.Name && (
+                  g.Name.toLowerCase().includes(guildName.toLowerCase()) ||
+                  guildName.toLowerCase().includes(g.Name.toLowerCase())
+                )
+              );
+
+              if (similarMatch) {
+                console.log(`[AlbionAPI] Similar match found: ${similarMatch.Name}`);
+                resolve({
+                  found: true,
+                  exactName: similarMatch.Name,
+                  guildId: similarMatch.Id
+                });
+                return;
+              }
+
+              // Se não achou nada similar, retorna o primeiro (pode ser uma busca parcial)
+              console.log(`[AlbionAPI] Using first result: ${guilds[0].Name}`);
+              resolve({
+                found: true,
+                exactName: guilds[0].Name,
+                guildId: guilds[0].Id
+              });
+
+            } catch (error) {
+              console.error('[AlbionAPI] Error parsing response:', error);
+              resolve({ found: false });
+            }
+          });
+        });
+
+        req.on('error', (error) => {
+          console.error('[AlbionAPI] Request error:', error);
+          resolve({ found: false });
+        });
+
+        req.on('timeout', () => {
+          console.error('[AlbionAPI] Request timeout');
+          req.destroy();
+          resolve({ found: false });
+        });
+
+        req.end();
       });
+
+    } catch (error) {
+      console.error('[ConfigActions] Error in searchGuildInAPI:', error);
+      return { found: false };
     }
   }
 
