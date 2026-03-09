@@ -20,19 +20,19 @@ class RaidAvalonHandler {
         nome: 'Tank',
         emoji: '🛡️',
         cor: 0x3498DB,
-        armas: ['Martelo', 'Maça']
+        armas: ['Martelo', 'Incubus']
       },
       dps: {
         nome: 'DPS',
         emoji: '⚔️',
         cor: 0xE74C3C,
-        armas: ['Fura-bruma', 'Fulgurante', 'Aguia']
+        armas: ['Fura-bruma', 'Fulgurante', 'Aguia', 'Quebra-reinos']
       },
       healer: {
         nome: 'Healer',
         emoji: '💚',
         cor: 0x2ECC71,
-        armas: ['Sagrado', 'Nature']
+        armas: ['Queda-santa', 'Crosta']
       },
       suporte: {
         nome: 'Suporte',
@@ -307,6 +307,7 @@ class RaidAvalonHandler {
       raidData.canalTextoId = canalParticipar.id;
       raidData.status = 'aguardando';
       raidData.messageId = null;
+      raidData.tipo = 'raid_avalon';
 
       // Inicializar classes se não configuradas
       if (!raidData.classes) {
@@ -317,6 +318,13 @@ class RaidAvalonHandler {
           suporte: { limite: 0, participantes: [] },
           scout: { limite: 0, participantes: [] }
         };
+      }
+
+      // Garantir que todas as classes tenham estrutura
+      for (const key of ['tank', 'dps', 'healer', 'suporte', 'scout']) {
+        if (!raidData.classes[key]) {
+          raidData.classes[key] = { limite: 0, participantes: [] };
+        }
       }
 
       // Criar embed e botões
@@ -334,6 +342,12 @@ class RaidAvalonHandler {
       if (!global.activeRaids) global.activeRaids = new Map();
       global.activeRaids.set(eventId, raidData);
 
+      // Adicionar também em activeEvents para compatibilidade com lootsplit
+      global.activeEvents.set(eventId, {
+        ...raidData,
+        participantes: this.getAllParticipantsMap(raidData)
+      });
+
       // Limpar temp
       global.raidTemp.delete(interaction.user.id);
 
@@ -349,6 +363,27 @@ class RaidAvalonHandler {
         content: '❌ Erro ao criar raid. Verifique as permissões do bot.'
       });
     }
+  }
+
+  /**
+   * Converte participantes de todas as classes para um Map único (compatibilidade)
+   */
+  static getAllParticipantsMap(raidData) {
+    const map = new Map();
+    for (const classe of Object.values(raidData.classes || {})) {
+      for (const participante of classe.participantes || []) {
+        map.set(participante.userId, {
+          nick: participante.nick,
+          userId: participante.userId,
+          tempoInicio: null,
+          tempoTotal: 0,
+          pausado: false,
+          classe: participante.classe,
+          arma: participante.arma
+        });
+      }
+    }
+    return map;
   }
 
   /**
@@ -414,46 +449,49 @@ class RaidAvalonHandler {
   static createRaidButtons(raidData) {
     const rows = [];
 
-    // Menu de seleção de classe
-    const selectMenu = new StringSelectMenuBuilder()
-      .setCustomId(`raid_select_class_${raidData.id}`)
-      .setPlaceholder('🎮 Selecione sua classe...')
-      .addOptions([
-        new StringSelectMenuOptionBuilder()
-          .setLabel('Tank')
-          .setValue('tank')
-          .setDescription('Defesa e agro')
-          .setEmoji('🛡️'),
-        new StringSelectMenuOptionBuilder()
-          .setLabel('DPS')
-          .setValue('dps')
-          .setDescription('Dano em área/single target')
-          .setEmoji('⚔️'),
-        new StringSelectMenuOptionBuilder()
-          .setLabel('Healer')
-          .setValue('healer')
-          .setDescription('Cura e suporte')
-          .setEmoji('💚'),
-        new StringSelectMenuOptionBuilder()
-          .setLabel('Suporte')
-          .setValue('suporte')
-          .setDescription('Buffs e controle')
-          .setEmoji('✨'),
-        new StringSelectMenuOptionBuilder()
-          .setLabel('Scout')
-          .setValue('scout')
-          .setDescription('Reconhecimento')
-          .setEmoji('👁️')
-      ]);
+    // Menu de seleção de classe (apenas se não estiver em_andamento)
+    if (raidData.status === 'aguardando') {
+      const selectMenu = new StringSelectMenuBuilder()
+        .setCustomId(`raid_select_class_${raidData.id}`)
+        .setPlaceholder('🎮 Selecione sua classe...')
+        .addOptions([
+          new StringSelectMenuOptionBuilder()
+            .setLabel('Tank')
+            .setValue('tank')
+            .setDescription('Defesa e agro')
+            .setEmoji('🛡️'),
+          new StringSelectMenuOptionBuilder()
+            .setLabel('DPS')
+            .setValue('dps')
+            .setDescription('Dano em área/single target')
+            .setEmoji('⚔️'),
+          new StringSelectMenuOptionBuilder()
+            .setLabel('Healer')
+            .setValue('healer')
+            .setDescription('Cura e suporte')
+            .setEmoji('💚'),
+          new StringSelectMenuOptionBuilder()
+            .setLabel('Suporte')
+            .setValue('suporte')
+            .setDescription('Buffs e controle')
+            .setEmoji('✨'),
+          new StringSelectMenuOptionBuilder()
+            .setLabel('Scout')
+            .setValue('scout')
+            .setDescription('Reconhecimento')
+            .setEmoji('👁️')
+        ]);
 
-    rows.push(new ActionRowBuilder().addComponents(selectMenu));
+      rows.push(new ActionRowBuilder().addComponents(selectMenu));
+    }
 
     // Botões de controle (apenas criador/staff)
     const controleRow = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId(`raid_iniciar_${raidData.id}`)
         .setLabel('▶️ Iniciar')
-        .setStyle(ButtonStyle.Success),
+        .setStyle(ButtonStyle.Success)
+        .setDisabled(raidData.status !== 'aguardando'),
       new ButtonBuilder()
         .setCustomId(`raid_finalizar_${raidData.id}`)
         .setLabel('🏁 Finalizar')
@@ -477,6 +515,14 @@ class RaidAvalonHandler {
       if (!raidData) {
         return interaction.reply({
           content: '❌ Raid não encontrada!',
+          ephemeral: true
+        });
+      }
+
+      // Verificar se raid já iniciou
+      if (raidData.status !== 'aguardando') {
+        return interaction.reply({
+          content: '❌ A raid já foi iniciada! Não é mais possível entrar.',
           ephemeral: true
         });
       }
@@ -567,45 +613,58 @@ class RaidAvalonHandler {
         userId: member.id,
         nick: member.nickname || member.user.username,
         arma: armaNome,
+        classe: classKey,
         joinedAt: Date.now()
       });
 
-      // Conceder permissão no canal de voz
-      const canalVoz = interaction.guild.channels.cache.get(raidData.canalVozId);
-      if (canalVoz) {
-        try {
-          await canalVoz.permissionOverwrites.create(member.id, {
-            Connect: true,
-            Speak: true,
-            ViewChannel: true
-          });
-        } catch (e) {
-          console.log('[RaidAvalon] Could not grant voice permission:', e.message);
-        }
+      // Atualizar também no activeEvents para compatibilidade
+      const eventData = global.activeEvents.get(raidId);
+      if (eventData) {
+        eventData.participantes.set(member.id, {
+          nick: member.nickname || member.user.username,
+          userId: member.id,
+          tempoInicio: null,
+          tempoTotal: 0,
+          pausado: false,
+          classe: classKey,
+          arma: armaNome
+        });
       }
 
       // Atualizar painel
       await this.updateRaidPanel(interaction, raidData);
 
-      // Enviar imagem do set
-      const imagePath = `png/raid/${weaponKey}.png`;
+      // Enviar imagens do set + arma
+      const armaImagePath = `png/raid/${weaponKey}.png`;
+      const setSkipPath = `png/raid/set-skip.png`;
 
       try {
         await interaction.reply({
           content: `✅ **Você entrou na raid como ${classKey.toUpperCase()}!**\n\n` +
                    `⚔️ **Arma:** ${armaNome}\n` +
                    `📋 **Set recomendado:**`,
-          files: [imagePath],
+          files: [armaImagePath, setSkipPath],
           ephemeral: true
         });
       } catch (imgError) {
-        // Se imagem não existir, envia sem ela
-        await interaction.reply({
-          content: `✅ **Você entrou na raid como ${classKey.toUpperCase()}!**\n\n` +
-                   `⚔️ **Arma:** ${armaNome}\n\n` +
-                   `⚠️ *Imagem do set não encontrada. Verifique o caminho: ${imagePath}*`,
-          ephemeral: true
-        });
+        // Tentar enviar só o set se a imagem da arma não existir
+        try {
+          await interaction.reply({
+            content: `✅ **Você entrou na raid como ${classKey.toUpperCase()}!**\n\n` +
+                     `⚔️ **Arma:** ${armaNome}\n` +
+                     `📋 **Set recomendado:**`,
+            files: [setSkipPath],
+            ephemeral: true
+          });
+        } catch (setError) {
+          // Se nem o set existir, envia sem imagens
+          await interaction.reply({
+            content: `✅ **Você entrou na raid como ${classKey.toUpperCase()}!**\n\n` +
+                     `⚔️ **Arma:** ${armaNome}\n\n` +
+                     `⚠️ *Imagens do set não encontradas.*`,
+            ephemeral: true
+          });
+        }
       }
 
     } catch (error) {
@@ -622,9 +681,9 @@ class RaidAvalonHandler {
    */
   static getArmasPorClasse(classKey) {
     const armas = {
-      tank: ['Martelo', 'Maça'],
-      dps: ['Fura-bruma', 'Fulgurante', 'Aguia'],
-      healer: ['Sagrado', 'Nature'],
+      tank: ['Martelo', 'Incubus'],
+      dps: ['Fura-bruma', 'Fulgurante', 'Aguia', 'Quebra-reinos'],
+      healer: ['Queda-santa', 'Crosta'],
       suporte: ['Chama-sombra', 'Para-tempo'],
       scout: ['Para-tempo']
     };
@@ -637,12 +696,13 @@ class RaidAvalonHandler {
   static getArmaNomeByKey(key) {
     const map = {
       'martelo': 'Martelo',
-      'maca': 'Maça',
+      'incubus': 'Incubus',
       'fura-bruma': 'Fura-bruma',
       'fulgurante': 'Fulgurante',
       'aguia': 'Águia',
-      'sagrado': 'Sagrado',
-      'nature': 'Nature',
+      'quebra-reinos': 'Quebra-reinos',
+      'queda-santa': 'Queda-santa',
+      'crosta': 'Crosta',
       'chama-sombra': 'Chama-sombra',
       'para-tempo': 'Para-tempo'
     };
@@ -707,10 +767,53 @@ class RaidAvalonHandler {
       raidData.status = 'em_andamento';
       raidData.inicioTimestamp = Date.now();
 
+      // MOVER TODOS OS PARTICIPANTES PARA O CANAL DE VOZ
+      const canalVoz = interaction.guild.channels.cache.get(raidData.canalVozId);
+      const canalAguardando = interaction.guild.channels.cache.find(
+        c => c.name === '🔊╠Aguardando-Evento'
+      );
+
+      if (canalVoz) {
+        for (const classe of Object.values(raidData.classes || {})) {
+          for (const participante of classe.participantes || []) {
+            const member = await interaction.guild.members.fetch(participante.userId).catch(() => null);
+            if (member) {
+              // Conceder permissão no canal de voz
+              try {
+                await canalVoz.permissionOverwrites.create(participante.userId, {
+                  Connect: true,
+                  Speak: true,
+                  ViewChannel: true
+                });
+              } catch (e) {
+                console.log(`[RaidAvalon] Could not grant permission to ${participante.userId}`);
+              }
+
+              // Mover para o canal se estiver em "Aguardando-Evento"
+              if (member.voice.channelId === canalAguardando?.id) {
+                try {
+                  await member.voice.setChannel(canalVoz.id);
+                  console.log(`[RaidAvalon] Moved ${participante.nick} to voice channel`);
+                } catch (e) {
+                  console.log(`[RaidAvalon] Could not move ${participante.userId}: ${e.message}`);
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // Atualizar também em activeEvents
+      const eventData = global.activeEvents.get(raidId);
+      if (eventData) {
+        eventData.status = 'em_andamento';
+        eventData.inicioTimestamp = Date.now();
+      }
+
       await this.updateRaidPanel(interaction, raidData);
 
       await interaction.reply({
-        content: '🚀 **Raid iniciada!** Boa sorte a todos!',
+        content: '🚀 **Raid iniciada!** Todos os participantes foram movidos para o canal de voz!',
         ephemeral: true
       });
 
@@ -740,6 +843,16 @@ class RaidAvalonHandler {
       raidData.status = 'encerrado';
       raidData.finalizadoEm = Date.now();
 
+      // Calcular tempo de participação para todos
+      if (raidData.inicioTimestamp) {
+        const tempoTotal = Date.now() - raidData.inicioTimestamp;
+        for (const classe of Object.values(raidData.classes || {})) {
+          for (const participante of classe.participantes || []) {
+            participante.tempoTotal = tempoTotal;
+          }
+        }
+      }
+
       // Mover todos para Aguardando-Evento
       const canalAguardando = interaction.guild.channels.cache.find(
         c => c.name === '🔊╠Aguardando-Evento'
@@ -762,7 +875,7 @@ class RaidAvalonHandler {
         await canalVoz.delete('Raid finalizada');
       }
 
-      // Criar resumo
+      // Criar resumo em canal de eventos encerrados com botão de lootsplit
       await this.createFinishedRaidSummary(interaction, raidData);
 
       // Deletar mensagem original
@@ -772,10 +885,35 @@ class RaidAvalonHandler {
         if (msg) await msg.delete();
       }
 
+      // Salvar em eventos finalizados para lootsplit
+      if (!global.finishedEvents) global.finishedEvents = new Map();
+
+      // Converter participantes para o formato do lootsplit
+      const participantesMap = new Map();
+      for (const classe of Object.values(raidData.classes || {})) {
+        for (const participante of classe.participantes || []) {
+          participantesMap.set(participante.userId, {
+            nick: participante.nick,
+            userId: participante.userId,
+            tempoTotal: participante.tempoTotal || 0,
+            pausado: false,
+            classe: participante.classe,
+            arma: participante.arma
+          });
+        }
+      }
+
+      global.finishedEvents.set(raidId, {
+        ...raidData,
+        participantes: participantesMap,
+        finalizadoEm: Date.now()
+      });
+
       global.activeRaids.delete(raidId);
+      global.activeEvents.delete(raidId);
 
       await interaction.reply({
-        content: '✅ **Raid finalizada com sucesso!**',
+        content: '✅ **Raid finalizada com sucesso!**\n💰 Use o botão "Simular Evento" no canal de eventos encerrados para calcular o loot.',
         ephemeral: true
       });
 
@@ -814,6 +952,7 @@ class RaidAvalonHandler {
       }
 
       global.activeRaids.delete(raidId);
+      global.activeEvents.delete(raidId);
 
       await interaction.reply({
         content: '🗑️ **Raid cancelada!**',
@@ -832,11 +971,26 @@ class RaidAvalonHandler {
         c => c.name === '📁 EVENTOS ENCERRADOS' && c.type === ChannelType.GuildCategory
       );
 
-      if (!categoriaEncerrados) return;
+      if (!categoriaEncerrados) {
+        console.error('[RaidAvalon] Categoria de eventos encerrados não encontrada');
+        return;
+      }
+
+      // Buscar taxa da guilda
+      const config = global.guildConfig?.get(interaction.guild.id) || {};
+      const taxaGuilda = config.taxaGuilda || 10;
+
+      // Calcular tempo total
+      let tempoTotalMin = 0;
+      if (raidData.inicioTimestamp && raidData.finalizadoEm) {
+        tempoTotalMin = Math.floor((raidData.finalizadoEm - raidData.inicioTimestamp) / 1000 / 60);
+      }
 
       let resumo = '';
+      let totalParticipantes = 0;
       for (const [key, data] of Object.entries(raidData.classes || {})) {
         resumo += `**${key.toUpperCase()}** (${data.participantes?.length || 0}):\n`;
+        totalParticipantes += data.participantes?.length || 0;
         if (data.participantes) {
           data.participantes.forEach(p => {
             resumo += `• ${p.nick} - ${p.arma}\n`;
@@ -850,11 +1004,23 @@ class RaidAvalonHandler {
         .setDescription(
           `**Criador:** <@${raidData.criadorId}>\n` +
           `**Horário:** ${raidData.horario}\n` +
-          `**Total:** ${this.getTotalParticipants(raidData)} participantes\n\n` +
+          `**Duração:** ${tempoTotalMin} minutos\n` +
+          `**Total:** ${totalParticipantes} participantes\n` +
+          `**Taxa Guilda:** ${taxaGuilda}%\n\n` +
           `**Participantes por Classe:**\n${resumo}`
         )
         .setColor(0x2ECC71)
         .setTimestamp();
+
+      // Criar botão de lootsplit igual ao do evento normal
+      const botoes = new ActionRowBuilder()
+        .addComponents(
+          new ButtonBuilder()
+            .setCustomId(`loot_simular_${raidData.id}`)
+            .setLabel('💰 Simular Evento')
+            .setStyle(ButtonStyle.Success)
+            .setEmoji('💎')
+        );
 
       const canal = await interaction.guild.channels.create({
         name: `📁-raid-${raidData.nome.substring(0, 15)}`,
@@ -869,7 +1035,12 @@ class RaidAvalonHandler {
         ]
       });
 
-      await canal.send({ embeds: [embed] });
+      await canal.send({ 
+        embeds: [embed],
+        components: [botoes]
+      });
+
+      console.log(`[RaidAvalon] Created finished raid channel: ${canal.name}`);
 
     } catch (error) {
       console.error('[RaidAvalon] Error creating summary:', error);
