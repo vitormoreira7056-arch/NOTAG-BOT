@@ -1,13 +1,13 @@
 const {
-  Client,
-  GatewayIntentBits,
-  Collection,
-  REST,
-  Routes,
-  Events,
-  PermissionFlagsBits,
-  EmbedBuilder,
-  ChannelType
+ Client,
+ GatewayIntentBits,
+ Collection,
+ REST,
+ Routes,
+ Events,
+ PermissionFlagsBits,
+ EmbedBuilder,
+ ChannelType
 } = require('discord.js');
 const fs = require('fs');
 require('dotenv').config();
@@ -79,6 +79,8 @@ global.pendingOrbDeposits = new Map();
 global.activeXpEvents = new Map();
 global.activeRaids = new Map(); // NOVO - Raids Avalon ativas
 global.raidTemp = new Map(); // NOVO - Dados temporários de raid
+global.orbTemp = new Map(); // NOVO - Dados temporários de orb
+global.guildaRegistroTemp = new Map(); // NOVO - Dados temporários de registro de guilda
 global.client = client;
 
 // Carregar dados persistidos (blacklist e histórico)
@@ -746,6 +748,33 @@ client.on(Events.InteractionCreate, async interaction => {
         await ConfigActions.handleAtualizarBot(interaction);
         return;
       }
+
+      // GUILDA REGISTRO - NOVOS BOTÕES
+      if (customId.startsWith('confirmar_guilda_')) {
+        const parts = customId.replace('confirmar_guilda_', '').split('_');
+        const server = parts[0];
+        const guildName = parts.slice(1).join(' ');
+        await ConfigActions.confirmarGuildaRegistro(interaction, server, guildName);
+        return;
+      }
+
+      if (customId === 'cancelar_guilda_registro') {
+        await ConfigActions.cancelarGuildaRegistro(interaction);
+        return;
+      }
+
+      // XP EVENT - Botões de finalizar/cancelar
+      if (customId.startsWith('xp_event_finalizar_')) {
+        const eventId = customId.replace('xp_event_finalizar_', '');
+        await XpEventHandler.finalizarXpEvent(interaction, eventId);
+        return;
+      }
+
+      if (customId.startsWith('xp_event_cancelar_')) {
+        const eventId = customId.replace('xp_event_cancelar_', '');
+        await XpEventHandler.cancelarXpEvent(interaction, eventId);
+        return;
+      }
     }
 
     // ==================== SELECT MENUS ====================
@@ -817,6 +846,12 @@ client.on(Events.InteractionCreate, async interaction => {
         const classKey = parts[3];
         const weaponKey = interaction.values[0];
         await RaidAvalonHandler.processWeaponSelect(interaction, raidId, classKey, weaponKey);
+        return;
+      }
+
+      // GUILDA REGISTRO - Seleção de servidor
+      if (interaction.customId === 'select_server_guilda') {
+        await ConfigActions.processGuildaServerSelect(interaction);
         return;
       }
     }
@@ -985,8 +1020,15 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      if (interaction.customId === 'modal_registrar_guilda') {
-        await ConfigActions.processGuildRegistration(interaction);
+      // GUILDA REGISTRO - Modal do nome
+      if (interaction.customId === 'modal_registrar_guilda_nome') {
+        await ConfigActions.processGuildaNome(interaction);
+        return;
+      }
+
+      // XP EVENT - Criação de evento
+      if (interaction.customId === 'modal_criar_xp_event') {
+        await XpEventHandler.processCreateXpEvent(interaction);
         return;
       }
     }
