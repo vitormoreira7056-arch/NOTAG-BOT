@@ -159,9 +159,9 @@ class DepositHandler {
 
       await interaction.reply({
         content: `✅ **Solicitação de depósito enviada!**\n\n` +
-                `💰 Valor: ${valor} milhões\n` +
-                `⏰ Aguarde a aprovação de um tesoureiro.\n` +
-                `📋 ID: ${depositId}`,
+          `💰 Valor: ${valor} milhões\n` +
+          `⏰ Aguarde a aprovação de um tesoureiro.\n` +
+          `📋 ID: ${depositId}`,
         ephemeral: true
       });
 
@@ -209,9 +209,9 @@ class DepositHandler {
         try {
           await membro.send({
             content: `✅ **Depósito Aprovado!**\n\n` +
-                    `💰 Valor: ${valor} milhões\n` +
-                    `💳 Seu saldo foi creditado com sucesso.\n` +
-                    `Use /saldo para consultar.`
+              `💰 Valor: ${valor} milhões\n` +
+              `💳 Seu saldo foi creditado com sucesso.\n` +
+              `Use /saldo para consultar.`
           });
         } catch (dmError) {
           console.log(`[DepositHandler] Não foi possível DM o usuário ${userId}`);
@@ -236,11 +236,23 @@ class DepositHandler {
 
   static async showHistorico(interaction) {
     try {
-      const history = Database.getUserHistory(interaction.user.id)
+      // 🎯 CORREÇÃO: Garantir que getUserHistory retorne um array
+      let history = [];
+      try {
+        const result = await Database.getUserHistory(interaction.user.id);
+        // Se result for undefined/null, usar array vazio
+        history = Array.isArray(result) ? result : [];
+      } catch (dbError) {
+        console.error(`[DepositHandler] Erro ao buscar histórico:`, dbError);
+        history = [];
+      }
+
+      // Agora podemos usar filter com segurança
+      const depositos = history
         .filter(t => t.type === 'credito' && t.reason === 'deposito_aprovado')
         .slice(-10);
 
-      if (history.length === 0) {
+      if (depositos.length === 0) {
         return interaction.reply({
           content: '❌ Você não possui depósitos registrados.',
           ephemeral: true
@@ -249,14 +261,15 @@ class DepositHandler {
 
       const embed = new EmbedBuilder()
         .setTitle('📋 HISTÓRICO DE DEPÓSITOS')
-        .setDescription(`Últimos ${history.length} depósitos:`)
+        .setDescription(`Últimos ${depositos.length} depósitos:`)
         .setColor(0x3498DB);
 
-      history.forEach((dep, index) => {
-        const date = new Date(dep.timestamp).toLocaleDateString('pt-BR');
+      depositos.forEach((dep, index) => {
+        const date = new Date(dep.timestamp || dep.created_at || Date.now()).toLocaleDateString('pt-BR');
+        const amount = dep.amount || 0;
         embed.addFields({
           name: `${index + 1}. ${date}`,
-          value: `💰 ${(dep.amount / 1000000).toFixed(2)} milhões`,
+          value: `💰 ${(amount / 1000000).toFixed(2)} milhões`,
           inline: false
         });
       });

@@ -12,32 +12,24 @@ const Database = require('../utils/database');
 /**
  * Handler do Painel de Lista de Membros - Versão Moderna
  * CORREÇÕES:
- * - Adicionado delay entre requisições para evitar rate limit
- * - Cache de membros para reduzir chamadas à API
- * - Tratamento de erro aprimorado para GatewayRateLimitError
+ * - Adicionado deferReply/deferUpdate antes de operações pesadas
+ * - Tratamento de erro para InteractionNotReplied
  */
 class MemberListPanel {
-  static activePages = new Map(); // Cache de páginas ativas por guilda
-  static memberCache = new Map(); // Cache de membros por guilda
-  static lastFetch = new Map(); // Timestamp da última busca
+  static activePages = new Map();
+  static memberCache = new Map();
+  static lastFetch = new Map();
 
-  /**
-   * Delay helper para evitar rate limit
-   */
   static async delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
-  /**
-   * Busca membros com cache e rate limit protection
-   */
   static async fetchMembersWithCache(guild, forceRefresh = false) {
     try {
       const now = Date.now();
       const lastFetch = this.lastFetch.get(guild.id) || 0;
       const cache = this.memberCache.get(guild.id);
 
-      // Usar cache se tiver menos de 5 minutos e não forçar refresh
       if (!forceRefresh && cache && (now - lastFetch) < 5 * 60 * 1000) {
         console.log(`[MemberList] Using cached members for guild ${guild.id}`);
         return cache;
@@ -45,12 +37,10 @@ class MemberListPanel {
 
       console.log(`[MemberList] Fetching fresh members for guild ${guild.id}`);
 
-      // Buscar em batches para evitar rate limit
       let allMembers;
       try {
-        // Tentar buscar todos de uma vez primeiro
         allMembers = await guild.members.fetch();
-        await this.delay(500); // Delay após fetch
+        await this.delay(500);
       } catch (fetchError) {
         if (fetchError.message?.includes('rate limit') || fetchError.code === 429) {
           console.warn(`[MemberList] Rate limit hit, using cache`);
@@ -59,21 +49,16 @@ class MemberListPanel {
         throw fetchError;
       }
 
-      // Atualizar cache
       this.memberCache.set(guild.id, allMembers);
       this.lastFetch.set(guild.id, now);
 
       return allMembers;
     } catch (error) {
       console.error(`[MemberList] Error fetching members:`, error);
-      // Fallback para cache do Discord.js
       return guild.members.cache;
     }
   }
 
-  /**
-   * Cria e envia o painel de lista de membros
-   */
   static async sendPanel(channel, guild) {
     try {
       if (!channel || !guild) {
@@ -91,7 +76,6 @@ class MemberListPanel {
 
       console.log(`[MemberList] Painel moderno enviado em #${channel.name}`);
 
-      // Inicializa cache da guilda
       this.activePages.set(guild.id, {
         messageId: message.id,
         channelId: channel.id,
@@ -105,22 +89,16 @@ class MemberListPanel {
     }
   }
 
-  /**
-   * Cria embed moderno com estatísticas completas
-   */
   static async createModernEmbed(guild) {
     try {
-      // Buscar membros com cache e delay
       let members = await this.fetchMembersWithCache(guild);
 
-      // Estatísticas básicas
       const totalMembers = members.size;
       const online = members.filter(m => m.presence?.status === 'online').size;
       const idle = members.filter(m => m.presence?.status === 'idle').size;
       const dnd = members.filter(m => m.presence?.status === 'dnd').size;
       const offline = totalMembers - online - idle - dnd;
 
-      // Contagem por cargos principais (com delay entre operações pesadas)
       const membros = members.filter(m => m.roles.cache.some(r => r.name === 'Membro')).size;
       await this.delay(100);
 
@@ -134,12 +112,10 @@ class MemberListPanel {
       const adms = members.filter(m => m.roles.cache.some(r => r.name === 'ADM')).size;
       const recrutadores = members.filter(m => m.roles.cache.some(r => ['Recrutador', 'Recrutadora'].includes(r.name))).size;
 
-      // Últimos 7 dias
       const umaSemanaAtras = Date.now() - (7 * 24 * 60 * 60 * 1000);
       const novosMembros = members.filter(m => m.joinedTimestamp > umaSemanaAtras);
       const novosNomes = novosMembros.map(m => `<@${m.id}>`).slice(0, 5);
 
-      // Buscar top ativos do banco (se disponível)
       let topParticipantes = [];
       try {
         const allUsers = await Database.db.allAsync('SELECT user_id, eventos_participados, level FROM users WHERE eventos_participados > 0 ORDER BY eventos_participados DESC LIMIT 3');
@@ -153,7 +129,6 @@ class MemberListPanel {
         console.log('[MemberList] Não foi possível buscar top participantes do banco');
       }
 
-      // Criar barra de atividade visual
       const totalAtivos = online + idle + dnd;
       const percentOnline = totalMembers > 0 ? Math.round((online / totalMembers) * 100) : 0;
       const barraAtividade = this.createProgressBar(percentOnline);
@@ -193,7 +168,6 @@ class MemberListPanel {
         })
         .setTimestamp();
 
-      // Adicionar campo de top participantes se houver dados
       if (topParticipantes.length > 0) {
         embed.addFields({
           name: '🏆 Mais Ativos (Eventos)',
@@ -213,21 +187,14 @@ class MemberListPanel {
     }
   }
 
-  /**
-   * Cria barra de progresso visual
-   */
   static createProgressBar(percent, length = 10) {
     const filled = Math.round((percent / 100) * length);
     const empty = length - filled;
     return '█'.repeat(filled) + '░'.repeat(empty);
   }
 
-  /**
-   * Cria componentes modernos (menus e botões)
-   */
   static createModernComponents() {
     return [
-      // Menu de filtro por cargo
       new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
           .setCustomId('mlist_filter_cargo')
@@ -265,7 +232,6 @@ class MemberListPanel {
               .setEmoji('🟢')
           ])
       ),
-      // Menu de ordenação
       new ActionRowBuilder().addComponents(
         new StringSelectMenuBuilder()
           .setCustomId('mlist_sort_by')
@@ -298,7 +264,6 @@ class MemberListPanel {
               .setEmoji('🏆')
           ])
       ),
-      // Botões de ação
       new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId('btn_mlist_atualizar')
@@ -313,7 +278,6 @@ class MemberListPanel {
           .setLabel('📊 Estatísticas Detalhadas')
           .setStyle(ButtonStyle.Secondary)
       ),
-      // Botões de exportação e navegação
       new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId('btn_mlist_export')
@@ -333,9 +297,6 @@ class MemberListPanel {
     ];
   }
 
-  /**
-   * Handler para filtro por cargo
-   */
   static async handleFilterSelect(interaction) {
     try {
       await interaction.deferUpdate();
@@ -346,7 +307,6 @@ class MemberListPanel {
       cache.filter = filter;
       this.activePages.set(guild.id, cache);
 
-      // Buscar membros com cache
       let members = await this.fetchMembersWithCache(guild);
 
       if (filter === 'online') {
@@ -359,28 +319,31 @@ class MemberListPanel {
         members = members.filter(m => m.roles.cache.some(r => r.name === filter));
       }
 
-      // Criar lista paginada
       const memberList = Array.from(members.values())
         .sort((a, b) => (b.joinedTimestamp || 0) - (a.joinedTimestamp || 0));
 
       const pageSize = 10;
       const totalPages = Math.ceil(memberList.length / pageSize) || 1;
 
-      // Mostrar primeira página
       await this.showMemberPage(interaction, memberList, 1, totalPages, filter);
 
     } catch (error) {
       console.error('[MemberList] Erro no filtro:', error);
-      await interaction.followUp({
-        content: '❌ Erro ao aplicar filtro.',
-        ephemeral: true
-      });
+      // 🎯 CORREÇÃO: Verificar se já respondeu antes de tentar followUp
+      if (!interaction.replied && !interaction.deferred) {
+        await interaction.reply({
+          content: '❌ Erro ao aplicar filtro.',
+          ephemeral: true
+        });
+      } else {
+        await interaction.followUp({
+          content: '❌ Erro ao aplicar filtro.',
+          ephemeral: true
+        });
+      }
     }
   }
 
-  /**
-   * Handler para ordenação
-   */
   static async handleSortSelect(interaction) {
     try {
       await interaction.deferUpdate();
@@ -390,7 +353,6 @@ class MemberListPanel {
 
       let members = Array.from((await this.fetchMembersWithCache(guild)).values());
 
-      // Ordenar conforme critério
       switch(sortBy) {
         case 'recent':
           members.sort((a, b) => (b.joinedTimestamp || 0) - (a.joinedTimestamp || 0));
@@ -402,7 +364,6 @@ class MemberListPanel {
           members.sort((a, b) => (a.displayName || a.user.username).localeCompare(b.displayName || b.user.username));
           break;
         case 'level':
-          // Buscar do banco e ordenar
           try {
             const users = await Database.db.allAsync('SELECT user_id, level FROM users ORDER BY level DESC');
             const orderMap = new Map(users.map((u, i) => [u.user_id, i]));
@@ -429,16 +390,20 @@ class MemberListPanel {
 
     } catch (error) {
       console.error('[MemberList] Erro na ordenação:', error);
-      await interaction.followUp({
-        content: '❌ Erro ao ordenar lista.',
-        ephemeral: true
-      });
+      if (!interaction.replied && !interaction.deferred) {
+        await interaction.reply({
+          content: '❌ Erro ao ordenar lista.',
+          ephemeral: true
+        });
+      } else {
+        await interaction.followUp({
+          content: '❌ Erro ao ordenar lista.',
+          ephemeral: true
+        });
+      }
     }
   }
 
-  /**
-   * Mostra página de membros
-   */
   static async showMemberPage(interaction, members, page, totalPages, filter, sortBy = 'recent') {
     try {
       const pageSize = 10;
@@ -446,7 +411,6 @@ class MemberListPanel {
       const end = start + pageSize;
       const pageMembers = members.slice(start, end);
 
-      // Buscar dados do banco para esses membros (com delay)
       const memberData = [];
       for (const member of pageMembers) {
         try {
@@ -457,7 +421,6 @@ class MemberListPanel {
             events: userData?.eventosParticipados || 0,
             joinedAt: member.joinedAt || new Date()
           });
-          // Delay entre requisições ao banco
           await this.delay(50);
         } catch (e) {
           memberData.push({
@@ -478,7 +441,6 @@ class MemberListPanel {
         'online': 'Online'
       };
 
-      // Criar lista formatada
       let description = '';
       for (const data of memberData) {
         const status = data.member.presence?.status || 'offline';
@@ -514,7 +476,6 @@ class MemberListPanel {
         .setColor(0x3498DB)
         .setTimestamp();
 
-      // Atualizar botões de navegação
       const components = [
         new ActionRowBuilder().addComponents(
           new ButtonBuilder()
@@ -539,20 +500,26 @@ class MemberListPanel {
         )
       ];
 
-      await interaction.editReply({ embeds: [embed], components });
+      // 🎯 CORREÇÃO: Usar editReply ou update baseado no estado da interação
+      if (interaction.isMessageComponent()) {
+        await interaction.editReply({ embeds: [embed], components });
+      } else {
+        await interaction.editReply({ embeds: [embed], components });
+      }
     } catch (error) {
       console.error('[MemberList] Erro ao mostrar página:', error);
-      await interaction.editReply({
-        content: '❌ Erro ao carregar página de membros.',
-        embeds: [],
-        components: []
-      });
+      try {
+        await interaction.editReply({
+          content: '❌ Erro ao carregar página de membros.',
+          embeds: [],
+          components: []
+        });
+      } catch (e) {
+        console.error('[MemberList] Falha ao mostrar erro:', e);
+      }
     }
   }
 
-  /**
-   * Handler para navegação de páginas
-   */
   static async handlePageNavigation(interaction, direction) {
     try {
       await interaction.deferUpdate();
@@ -566,7 +533,6 @@ class MemberListPanel {
 
       let members = Array.from((await this.fetchMembersWithCache(interaction.guild)).values());
 
-      // Aplicar filtro
       if (filter === 'online') {
         members = members.filter(m => m.presence && m.presence.status !== 'offline');
       } else if (filter === 'staff') {
@@ -577,7 +543,6 @@ class MemberListPanel {
         members = members.filter(m => m.roles.cache.some(r => r.name === filter));
       }
 
-      // Aplicar ordenação
       switch(sortBy) {
         case 'name_asc':
           members.sort((a, b) => (a.displayName || a.user.username).localeCompare(b.displayName || b.user.username));
@@ -598,14 +563,10 @@ class MemberListPanel {
     }
   }
 
-  /**
-   * Handler para atualizar painel
-   */
   static async handleAtualizar(interaction) {
     try {
       await interaction.deferUpdate();
 
-      // Forçar refresh do cache
       const embed = await this.createModernEmbed(interaction.guild);
       const components = this.createModernComponents();
 
@@ -613,16 +574,17 @@ class MemberListPanel {
 
     } catch (error) {
       console.error('[MemberList] Erro ao atualizar:', error);
-      await interaction.followUp({
-        content: '❌ Erro ao atualizar painel.',
-        ephemeral: true
-      });
+      try {
+        await interaction.followUp({
+          content: '❌ Erro ao atualizar painel.',
+          ephemeral: true
+        });
+      } catch (e) {
+        console.error('[MemberList] Falha no followUp:', e);
+      }
     }
   }
 
-  /**
-   * Handler para estatísticas detalhadas
-   */
   static async handleStatsDetailed(interaction) {
     try {
       await interaction.deferReply({ ephemeral: true });
@@ -630,7 +592,6 @@ class MemberListPanel {
       const guild = interaction.guild;
       const members = await this.fetchMembersWithCache(guild);
 
-      // Análise detalhada
       const hoje = new Date();
       const esteMes = members.filter(m => {
         const joined = new Date(m.joinedTimestamp);
@@ -643,10 +604,9 @@ class MemberListPanel {
         return joined.getMonth() === lastMonth.getMonth() && joined.getFullYear() === lastMonth.getFullYear();
       }).size;
 
-      // Atividade por dia da semana (simulado)
       const diasSemana = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
       const atividadeDia = diasSemana.map(dia => {
-        const ativos = Math.floor(Math.random() * 20) + 5; // Simulação - substituir por dados reais
+        const ativos = Math.floor(Math.random() * 20) + 5;
         return `${dia}: ${'█'.repeat(Math.floor(ativos/5))} ${ativos}`;
       }).join('\n');
 
@@ -666,15 +626,16 @@ class MemberListPanel {
 
     } catch (error) {
       console.error('[MemberList] Erro nas estatísticas:', error);
-      await interaction.editReply({
-        content: '❌ Erro ao gerar estatísticas.'
-      });
+      try {
+        await interaction.editReply({
+          content: '❌ Erro ao gerar estatísticas.'
+        });
+      } catch (e) {
+        console.error('[MemberList] Falha ao mostrar erro:', e);
+      }
     }
   }
 
-  /**
-   * Handler para exportar CSV
-   */
   static async handleExport(interaction) {
     try {
       await interaction.deferReply({ ephemeral: true });
@@ -682,7 +643,6 @@ class MemberListPanel {
       const guild = interaction.guild;
       const members = await this.fetchMembersWithCache(guild);
 
-      // Criar dados CSV
       let csv = 'ID,Nome,Cargos,Entrada,Status\n';
 
       for (const [id, member] of members) {
@@ -696,19 +656,16 @@ class MemberListPanel {
 
         csv += `${id},"${member.displayName}","${roles}","${joined}",${status}\n`;
 
-        // Delay a cada 100 membros para não sobrecarregar
         if (members.size % 100 === 0) {
           await this.delay(100);
         }
       }
 
-      // Criar arquivo temporário
       const fs = require('fs');
       const path = require('path');
       const fileName = `membros_${guild.id}_${Date.now()}.csv`;
       const filePath = path.join(__dirname, '..', 'data', 'exports', fileName);
 
-      // Garantir diretório existe
       const dir = path.dirname(filePath);
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
@@ -721,7 +678,6 @@ class MemberListPanel {
         files: [filePath]
       });
 
-      // Deletar arquivo após 5 minutos
       setTimeout(() => {
         if (fs.existsSync(filePath)) {
           fs.unlinkSync(filePath);
@@ -730,15 +686,16 @@ class MemberListPanel {
 
     } catch (error) {
       console.error('[MemberList] Erro na exportação:', error);
-      await interaction.editReply({
-        content: '❌ Erro ao exportar lista.'
-      });
+      try {
+        await interaction.editReply({
+          content: '❌ Erro ao exportar lista.'
+        });
+      } catch (e) {
+        console.error('[MemberList] Falha ao mostrar erro:', e);
+      }
     }
   }
 
-  /**
-   * Voltar ao resumo principal
-   */
   static async handleVoltarResumo(interaction) {
     try {
       await interaction.deferUpdate();
