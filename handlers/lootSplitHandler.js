@@ -11,6 +11,7 @@ const {
 } = require('discord.js');
 const Database = require('../utils/database');
 const XpHandler = require('./xpHandler');
+const XpEventHandler = require('./xpEventHandler');
 
 class LootSplitHandler {
   constructor() {
@@ -20,8 +21,8 @@ class LootSplitHandler {
 
   // ✅ CONSTANTES DE XP
   static XP_RATES = {
-    EVENTO_NORMAL: 1,      // 1 XP por minuto
-    RAID_AVALON: 2         // 2 XP por minuto (dobro)
+    EVENTO_NORMAL: 1, // 1 XP por minuto
+    RAID_AVALON: 2    // 2 XP por minuto (dobro)
   };
 
   // ✅ FUNÇÃO AUXILIAR: Formatar tempo em HH:MM:SS
@@ -428,9 +429,9 @@ class LootSplitHandler {
                   .setTitle('💰 PAGAMENTO RECEBIDO')
                   .setDescription(
                     `🎉 **Parabéns!** Você recebeu um pagamento!\n\n` +
-                    `> **Valor:** \`${participante.valor.toLocaleString()}\`\n` +
-                    `> **Evento:** ${simulation.eventId}\n` +
-                    `> **Data:** ${new Date().toLocaleString('pt-BR')}\n\n` +
+                    `\> **Valor:** \`${participante.valor.toLocaleString()}\`\n` +
+                    `\> **Evento:** ${simulation.eventId}\n` +
+                    `\> **Data:** ${new Date().toLocaleString('pt-BR')}\n\n` +
                     `💎 **Seu Novo Saldo:** \`${novoSaldo.toLocaleString()}\``
                   )
                   .setColor(0x2ECC71)
@@ -542,9 +543,9 @@ class LootSplitHandler {
       const eventData = global.finishedEvents?.get(simulation.eventId) || global.activeEvents?.get(simulation.eventId);
 
       // Verificar se é raid avalon pelo ID ou pelos dados do evento
-      const isRaidAvalon = eventId?.includes('raid') || 
-                          simulation.eventId?.includes('raid') ||
-                          eventData?.tipo === 'raid_avalon';
+      const isRaidAvalon = eventId?.includes('raid') ||
+        simulation.eventId?.includes('raid') ||
+        eventData?.tipo === 'raid_avalon';
 
       // Definir taxa de XP baseado no tipo de evento
       const xpRate = isRaidAvalon ? this.XP_RATES.RAID_AVALON : this.XP_RATES.EVENTO_NORMAL;
@@ -622,6 +623,13 @@ class LootSplitHandler {
           xpRate: xpRate
         }
       });
+
+      // ✅ INTEGRAÇÃO AUTOMÁTICA: Verificar eventos XP ativos
+      try {
+        await XpEventHandler.verificarEventosAtivos(interaction.guild, simulation.eventoNome);
+      } catch (e) {
+        console.error('[LootSplit] Error auto-checking XP events:', e);
+      }
 
       // Criar embed de confirmação do arquivamento com info de XP
       const embedArquivamento = new EmbedBuilder()

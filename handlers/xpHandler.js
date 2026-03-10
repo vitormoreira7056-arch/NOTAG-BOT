@@ -166,9 +166,9 @@ class XpHandler {
           `⭐ **Nível Anterior:** \`${oldLevel}\`\n` +
           `🏆 **Novo Nível:** \`${newLevel}\`\n\n` +
           `🎁 **Recompensas desbloqueadas:**\n` +
-          `> Acesso a novos conteúdos\n` +
-          `> Reconhecimento na guilda\n` +
-          `> Benefícios exclusivos\n\n` +
+          `\> Acesso a novos conteúdos\n` +
+          `\> Reconhecimento na guilda\n` +
+          `\> Benefícios exclusivos\n\n` +
           `💪 Continue participando de eventos para ganhar mais XP!`
         )
         .setColor(0xFFD700)
@@ -533,6 +533,39 @@ class XpHandler {
     } catch (error) {
       console.error(`[XpHandler] Error showing ranking:`, error);
       throw error;
+    }
+  }
+
+  /**
+   * ✅ NOVO: Adiciona uma insígnia ao usuário
+   * Usado pelo XpEventHandler para dar insígnias de conquistas
+   */
+  static async addInsignia(userId, insigniaId, insigniaNome = null) {
+    try {
+      const user = await Database.getUser(userId);
+      let insignias = [];
+
+      try {
+        insignias = JSON.parse(user?.insignias || '[]');
+        if (!Array.isArray(insignias)) insignias = [];
+      } catch (e) {
+        insignias = [];
+      }
+
+      insignias.push({
+        id: insigniaId,
+        nome: insigniaNome || `Insígnia ${Date.now()}`,
+        obtidaEm: Date.now()
+      });
+
+      await Database.updateUser(userId, {
+        insignias: JSON.stringify(insignias)
+      });
+
+      return true;
+    } catch (error) {
+      console.error('[XpHandler] Error adding insignia:', error);
+      return false;
     }
   }
 }

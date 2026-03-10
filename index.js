@@ -282,8 +282,8 @@ client.on(Events.InteractionCreate, async interaction => {
 
       // COMANDOS DE LIMPAR - Confirmações
       if (customId === 'confirmar_limpar_eventos' || customId === 'cancelar_limpar_eventos' ||
-          customId === 'confirmar_limpar_saldo' || customId === 'cancelar_limpar_saldo' ||
-          customId === 'confirmar_limpar_xp' || customId === 'cancelar_limpar_xp') {
+        customId === 'confirmar_limpar_saldo' || customId === 'cancelar_limpar_saldo' ||
+        customId === 'confirmar_limpar_xp' || customId === 'cancelar_limpar_xp') {
         return;
       }
 
@@ -605,7 +605,7 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // ✅ NOVO: Handlers do sistema de Orb XP atualizado
+      // ORB HANDLERS
       if (customId === 'orb_select_users') {
         await OrbHandler.openUserSelection(interaction);
         return;
@@ -743,7 +743,19 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // XP EVENT
+      // ✅ NOVO: XP EVENT COM SISTEMA DE NÍVEIS E PROGRESSO
+      if (customId.startsWith('xp_event_ver_progresso_')) {
+        const eventId = customId.replace('xp_event_ver_progresso_', '');
+        await XpEventHandler.handleVerProgresso(interaction, eventId);
+        return;
+      }
+
+      if (customId.startsWith('xp_event_atualizar_')) {
+        const eventId = customId.replace('xp_event_atualizar_', '');
+        await XpEventHandler.handleAtualizarProgresso(interaction, eventId);
+        return;
+      }
+
       if (customId.startsWith('xp_event_finalizar_')) {
         const eventId = customId.replace('xp_event_finalizar_', '');
         await XpEventHandler.finalizarXpEvent(interaction, eventId);
@@ -827,7 +839,6 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // ✅ NOVO: Handler para seleção de usuários do orb
       if (interaction.customId === 'select_orb_users') {
         await OrbHandler.processUserSelection(interaction);
         return;
@@ -954,7 +965,6 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // ✅ NOVO: Handler para modal de depósito de orb (atualizado)
       if (interaction.customId.startsWith('modal_depositar_orb_')) {
         await OrbHandler.processOrbDeposit(interaction);
         return;
