@@ -127,7 +127,7 @@ class RegistrationModal {
         });
       }
 
-      // 🎯 CORREÇÃO: Verificar se existe registro pendente deste usuário (buscando por userId)
+      // Verificar se existe registro pendente deste usuário
       if (!global.registrosPendentes) global.registrosPendentes = new Map();
 
       const registroExistente = Array.from(global.registrosPendentes.entries()).find(
@@ -234,22 +234,45 @@ class RegistrationModal {
       tempData.platform = platform;
       const { nick, guilda, arma, server, convidadoPor } = tempData;
 
-      let verification = { valid: false, error: null, details: null };
+      // 🎯 NOVA LÓGICA: Verificação com tratamento de erro aprimorado
+      let verification = { valid: false, error: null, details: null, apiStatus: null };
+      let usarRegistroOffline = false;
       let apiError = false;
 
       try {
         verification = await AlbionAPI.verifyPlayerGuild(nick, guilda, server);
+
+        // Se API retornar indisponível, usar modo offline
+        if (verification.apiStatus === 'API_UNAVAILABLE' || verification.apiStatus === 'ERROR') {
+          usarRegistroOffline = true;
+          apiError = true;
+          console.log('⚠️ API indisponível ou erro, usando modo offline para registro');
+        }
+
       } catch (apiErr) {
         console.error('❌ Erro na API:', apiErr);
+        usarRegistroOffline = true;
         apiError = true;
         verification.error = 'API indisponível ou timeout';
+        verification.apiStatus = 'ERROR';
       }
 
-      const apiVerified = verification.valid;
+      // Determinar se está validado (apenas se não for erro de API)
+      const apiVerified = verification.valid && !usarRegistroOffline;
 
-      if (!apiVerified) {
+      if (!apiVerified && !usarRegistroOffline) {
+        // API funcionou mas jogador não foi validado (nick errado, guilda errada, etc)
         console.log(`⚠️ API não validou jogador "${nick}": ${verification.error}`);
-        console.log(`📝 Permitindo registro mesmo assim (modo offline)`);
+
+        // Ainda assim permitimos o registro, mas marcamos como não verificado
+        // Se quiser BLOQUEAR registros não validados, descomente o código abaixo:
+        /*
+        return await interaction.editReply({
+          content: `❌ **Validação falhou:** ${verification.error}\n\nVerifique se o nick e a guilda estão corretos e tente novamente.`,
+          components: [],
+          embeds: []
+        });
+        */
       }
 
       const RegistrationActions = require('./registrationActions');
@@ -258,13 +281,12 @@ class RegistrationModal {
 
       const registroId = `reg_${Date.now()}_${interaction.user.id}`;
 
-      // 🎯 CORREÇÃO: Estrutura dos dados compatível com registrationActions
-      // Os dados ficam dentro de 'dados' para manter compatibilidade
+      // Estrutura dos dados compatível com registrationActions
       const registroData = {
         id: registroId,
         userId: interaction.user.id,
         userTag: interaction.user.tag,
-        dados: {  // 🎯 Estrutura aninhada esperada pelo registrationActions
+        dados: {
           nick: nick,
           nickDoJogo: nick,
           guilda: guilda,
@@ -275,7 +297,8 @@ class RegistrationModal {
         },
         albionData: verification.details || null,
         apiVerified: apiVerified,
-        apiError: apiError || !apiVerified,
+        apiError: apiError,
+        apiStatus: verification.apiStatus,
         status: 'pendente',
         tentativasAnteriores: tentativasAnteriores,
         historicoRecusas: historico,
@@ -284,16 +307,19 @@ class RegistrationModal {
 
       if (!global.registrosPendentes) global.registrosPendentes = new Map();
 
-      // 🎯 CORREÇÃO: Usar registroId como chave para compatibilidade com botões
+      // Usar registroId como chave para compatibilidade com botões
       global.registrosPendentes.set(registroId, registroData);
 
       global.registroTemp.delete(interaction.user.id);
 
       await this.sendToApprovalChannel(interaction, registroData, client);
 
+      // Mensagem de sucesso diferenciada baseada no status da API
       let mensagemSucesso;
       if (apiVerified) {
         mensagemSucesso = '✅ Registro validado pela API e enviado para análise!';
+      } else if (usarRegistroOffline) {
+        mensagemSucesso = '⚠️ Registro enviado para análise!\n\n_Note: API do Albion temporariamente indisponível. A staff irá verificar manualmente._';
       } else {
         mensagemSucesso = '⚠️ Registro enviado para análise!\n\n_Note: Não foi possível verificar automaticamente na API do Albion. A staff irá analisar manualmente._';
       }
@@ -355,13 +381,39 @@ class RegistrationModal {
         'asia': '🌏'
       };
 
-      // 🎯 CORREÇÃO: Acessar dados através de registroData.dados
       const dados = registroData.dados;
+
+      // Definir cor e status baseado na verificação
+      let embedColor = 0x2ECC71; // Verde (validado)
+      let footerText = `ID: ${registroData.id} | ✅ Verificado via API`;
+      let apiField = {
+        name: '✅ Validação API',
+        value: `Jogador encontrado!\nGuilda atual: ${registroData.albionData?.guildName || 'Sem guilda'}`,
+        inline: false
+      };
+
+      if (registroData.apiError) {
+        embedColor = 0xE74C3C; // Vermelho (erro API)
+        footerText = `ID: ${registroData.id} | 🔴 API Indisponível`;
+        apiField = {
+          name: '🔴 ATENÇÃO - API INDISPONÍVEL',
+          value: 'Não foi possível conectar à API do Albion. Verifique manualmente se o jogador existe antes de aprovar!',
+          inline: false
+        };
+      } else if (!registroData.apiVerified) {
+        embedColor = 0xF39C12; // Laranja (não verificado)
+        footerText = `ID: ${registroData.id} | ⚠️ NÃO verificado na API`;
+        apiField = {
+          name: '⚠️ ATENÇÃO',
+          value: 'Este nick não foi encontrado na API do Albion Online.\nVerifique manualmente se o jogador existe antes de aprovar!',
+          inline: false
+        };
+      }
 
       const embed = new EmbedBuilder()
         .setTitle('📝 Nova Solicitação de Registro')
         .setDescription(`Registro de ${interaction.user}`)
-        .setColor(registroData.apiVerified ? 0x2ECC71 : 0xF39C12)
+        .setColor(embedColor)
         .setThumbnail(interaction.user.displayAvatarURL({ dynamic: true }))
         .addFields(
           { name: '👤 Usuário Discord', value: `${interaction.user} (\`${interaction.user.id}\`)`, inline: false },
@@ -369,9 +421,10 @@ class RegistrationModal {
           { name: '🏰 Guilda Informada', value: dados.guilda || 'Nenhuma', inline: true },
           { name: '🌍 Servidor', value: `${serverEmoji[dados.server]} ${dados.server.toUpperCase()}`, inline: true },
           { name: '💻 Plataforma', value: dados.platform, inline: true },
-          { name: '⚔️ Arma/Spec', value: dados.arma, inline: false }
+          { name: '⚔️ Arma/Spec', value: dados.arma, inline: false },
+          apiField
         )
-        .setFooter({ text: `ID: ${registroData.id} | ${registroData.apiVerified ? '✅ Verificado via API' : '⚠️ NÃO verificado na API'}` })
+        .setFooter({ text: footerText })
         .setTimestamp();
 
       if (dados.convidadoPor) {
@@ -393,21 +446,10 @@ class RegistrationModal {
           inline: false
         });
 
-        embed.setColor(0xE74C3C);
-      }
-
-      if (registroData.albionData && registroData.apiVerified) {
-        embed.addFields({
-          name: '✅ Validação API',
-          value: `Jogador encontrado!\nGuilda atual: ${registroData.albionData.guildName || 'Sem guilda'}`,
-          inline: false
-        });
-      } else if (!registroData.apiVerified) {
-        embed.addFields({
-          name: '⚠️ ATENÇÃO',
-          value: 'Este nick não foi encontrado na API do Albion Online.\nVerifique manualmente se o jogador existe antes de aprovar!',
-          inline: false
-        });
+        // Se tem muitas tentativas, destacar em vermelho
+        if (registroData.tentativasAnteriores >= 2) {
+          embed.setColor(0xE74C3C);
+        }
       }
 
       const row1 = new ActionRowBuilder().addComponents(
@@ -457,7 +499,7 @@ class RegistrationModal {
       registroData.messageId = msg.id;
       registroData.channelId = msg.channel.id;
 
-      // 🎯 CORREÇÃO: Atualizar o registro no Map com os dados da mensagem
+      // Atualizar o registro no Map com os dados da mensagem
       global.registrosPendentes.set(registroData.id, registroData);
 
     } catch (error) {

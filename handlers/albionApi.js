@@ -1,24 +1,114 @@
 const https = require('https');
 
+/**
+ * AlbionAPI - Serviço unificado de integração com Albion Online
+ * Consolida: handlers/albionApi.js + services/albionApi.js
+ * Melhorias: Circuit Breaker, Cache Inteligente, Multi-endpoint, Retry com Backoff
+ */
 class AlbionAPI {
   constructor() {
-    this.baseUrl = 'gameinfo.albiononline.com';
-    this.timeout = 30000; // 30 segundos
+    // Múltiplos endpoints para fallback (oficiais da Sandbox Interactive)
+    this.endpoints = {
+      europe: 'gameinfo.albiononline.com',
+      americas: 'gameinfo-ams.albiononline.com', 
+      asia: 'gameinfo-sgp.albiononline.com'
+    };
+
+    this.timeout = 10000; // 10 segundos (mais rápido)
+    this.maxRetries = 2;
+
+    // Cache em memória: Map<playerName, {data, timestamp}>
+    this.cache = new Map();
+    this.cacheTTL = 60 * 60 * 1000; // 1 hora
+
+    // Cache negativo (jogadores não encontrados)
+    this.negativeCache = new Map();
+    this.negativeCacheTTL = 5 * 60 * 1000; // 5 minutos
+
+    // Circuit breaker
+    this.circuitBreaker = {
+      failures: 0,
+      lastFailure: null,
+      state: 'CLOSED',
+      threshold: 5,
+      timeout: 5 * 60 * 1000
+    };
   }
 
-  async searchPlayer(playerName, server = 'europe', retries = 3) {
+  checkCircuitBreaker() {
+    if (this.circuitBreaker.state === 'OPEN') {
+      const now = Date.now();
+      if (now - this.circuitBreaker.lastFailure > this.circuitBreaker.timeout) {
+        console.log('🔧 Circuit Breaker: HALF_OPEN');
+        this.circuitBreaker.state = 'HALF_OPEN';
+        return true;
+      }
+      return false;
+    }
+    return true;
+  }
+
+  recordSuccess() {
+    if (this.circuitBreaker.state === 'HALF_OPEN') {
+      console.log('✅ Circuit Breaker: CLOSED');
+      this.circuitBreaker.state = 'CLOSED';
+      this.circuitBreaker.failures = 0;
+    }
+  }
+
+  recordFailure() {
+    this.circuitBreaker.failures++;
+    this.circuitBreaker.lastFailure = Date.now();
+    if (this.circuitBreaker.failures >= this.circuitBreaker.threshold) {
+      console.error('🔴 Circuit Breaker: OPEN (5min)');
+      this.circuitBreaker.state = 'OPEN';
+    }
+  }
+
+  getFromCache(key) {
+    const cached = this.cache.get(key);
+    if (!cached) return null;
+    if (Date.now() - cached.timestamp > this.cacheTTL) {
+      this.cache.delete(key);
+      return null;
+    }
+    console.log(`📦 Cache hit: "${key}"`);
+    return cached.data;
+  }
+
+  setCache(key, data) {
+    this.cache.set(key, { data, timestamp: Date.now() });
+  }
+
+  getFromNegativeCache(key) {
+    const cached = this.negativeCache.get(key);
+    if (!cached) return null;
+    if (Date.now() - cached.timestamp > this.negativeCacheTTL) {
+      this.negativeCache.delete(key);
+      return null;
+    }
+    return true; // Já sabemos que não existe
+  }
+
+  setNegativeCache(key) {
+    this.negativeCache.set(key, { timestamp: Date.now() });
+  }
+
+  cleanupCache() {
+    const now = Date.now();
+    for (const [key, value] of this.cache.entries()) {
+      if (now - value.timestamp > this.cacheTTL) this.cache.delete(key);
+    }
+    for (const [key, value] of this.negativeCache.entries()) {
+      if (now - value.timestamp > this.negativeCacheTTL) this.negativeCache.delete(key);
+    }
+  }
+
+  makeRequest(hostname, path) {
     return new Promise((resolve, reject) => {
-      const encodedName = encodeURIComponent(playerName);
-      const url = `https://${this.baseUrl}/api/gameinfo/search?q=${encodedName}`;
-
-      console.log(`\n🔍 === BUSCANDO JOGADOR ===`);
-      console.log(`URL: ${url}`);
-      console.log(`Nick: ${playerName}`);
-      console.log(`Servidor: ${server}`);
-
       const options = {
-        hostname: this.baseUrl,
-        path: `/api/gameinfo/search?q=${encodedName}`,
+        hostname: hostname,
+        path: path,
         method: 'GET',
         headers: {
           'Accept': 'application/json',
@@ -27,208 +117,285 @@ class AlbionAPI {
       };
 
       const req = https.request(options, (res) => {
-        console.log(`📡 Status Code: ${res.statusCode}`);
-        console.log(`📡 Headers: ${JSON.stringify(res.headers)}`);
-
         let data = '';
-
-        res.on('data', (chunk) => {
-          data += chunk;
-        });
-
+        res.on('data', (chunk) => data += chunk);
         res.on('end', () => {
           try {
-            console.log(`📥 Resposta raw: ${data.substring(0, 500)}`);
-
-            if (!data || data.trim() === '') {
-              console.log('⚠️ Resposta VAZIA da API');
-              if (retries > 0) {
-                console.log(`🔄 Retry ${retries}...`);
-                setTimeout(() => {
-                  this.searchPlayer(playerName, server, retries - 1)
-                    .then(resolve)
-                    .catch(reject);
-                }, 3000);
-                return;
-              }
-              resolve(null);
-              return;
+            if (res.statusCode === 200) {
+              resolve({ success: true, data: JSON.parse(data) });
+            } else if (res.statusCode === 429) {
+              reject({ type: 'RATE_LIMIT', message: 'Rate limit' });
+            } else {
+              reject({ type: 'HTTP_ERROR', status: res.statusCode });
             }
-
-            const jsonData = JSON.parse(data);
-            console.log(`📊 Estrutura da resposta:`, Object.keys(jsonData));
-
-            const players = jsonData.players || [];
-            console.log(`👥 Total players encontrados: ${players.length}`);
-
-            if (players.length > 0) {
-              console.log(`👤 Primeiros 3 resultados:`);
-              players.slice(0, 3).forEach((p, i) => {
-                console.log(`  ${i+1}. ${p.Name} (Guild: ${p.GuildName || 'N/A'})`);
-              });
-            }
-
-            if (players.length === 0) {
-              console.log(`❌ Nenhum player encontrado para "${playerName}"`);
-              resolve(null);
-              return;
-            }
-
-            // Busca exata case-insensitive
-            const exactMatch = players.find(p => 
-              p.Name && p.Name.toLowerCase() === playerName.toLowerCase()
-            );
-
-            if (exactMatch) {
-              console.log(`✅ Match exato encontrado: ${exactMatch.Name}`);
-              resolve({
-                id: exactMatch.Id,
-                name: exactMatch.Name,
-                guildId: exactMatch.GuildId || null,
-                guildName: exactMatch.GuildName || null,
-                allianceId: exactMatch.AllianceId || null,
-                allianceName: exactMatch.AllianceName || null,
-                server: server
-              });
-              return;
-            }
-
-            // Se não achou exato, pega o primeiro
-            const player = players[0];
-            console.log(`⚠️ Usando primeiro resultado: ${player.Name}`);
-            resolve({
-              id: player.Id,
-              name: player.Name,
-              guildId: player.GuildId || null,
-              guildName: player.GuildName || null,
-              allianceId: player.AllianceId || null,
-              allianceName: player.AllianceName || null,
-              server: server
-            });
-
           } catch (error) {
-            console.error(`❌ Erro parse JSON:`, error.message);
-            console.error(`📄 Data recebida:`, data);
-            if (retries > 0) {
-              setTimeout(() => {
-                this.searchPlayer(playerName, server, retries - 1)
-                  .then(resolve)
-                  .catch(reject);
-              }, 3000);
-              return;
-            }
-            reject(error);
+            reject({ type: 'PARSE_ERROR', message: error.message });
           }
         });
       });
 
-      req.on('error', (error) => {
-        console.error(`❌ Erro de rede:`, error.message);
-        if (retries > 0) {
-          console.log(`🔄 Retry após erro...`);
-          setTimeout(() => {
-            this.searchPlayer(playerName, server, retries - 1)
-              .then(resolve)
-              .catch(reject);
-          }, 3000);
-          return;
-        }
-        reject(error);
-      });
-
+      req.on('error', (error) => reject({ type: 'NETWORK_ERROR', message: error.message }));
       req.setTimeout(this.timeout, () => {
-        console.error(`⏱️ Timeout (${this.timeout}ms)`);
         req.destroy();
-        if (retries > 0) {
-          console.log(`🔄 Retry após timeout...`);
-          this.searchPlayer(playerName, server, retries - 1)
-            .then(resolve)
-            .catch(reject);
-          return;
-        }
-        reject(new Error('Timeout'));
+        reject({ type: 'TIMEOUT', message: `Timeout ${this.timeout}ms` });
       });
-
       req.end();
     });
   }
 
-  async verifyPlayerGuild(playerName, guildName, server = 'europe') {
-    try {
-      console.log(`\n🚀 === INICIANDO VERIFICAÇÃO ===`);
-      console.log(`Player: "${playerName}"`);
-      console.log(`Guilda informada: "${guildName}"`);
+  async searchPlayer(playerName, server = 'europe') {
+    console.log(`\n🔍 Buscando: "${playerName}" [${server}]`);
 
+    const cacheKey = playerName.toLowerCase();
+    if (!this.checkCircuitBreaker()) {
+      const cached = this.getFromCache(cacheKey);
+      if (cached) return cached;
+      return null;
+    }
+
+    const cached = this.getFromCache(cacheKey);
+    if (cached) return cached;
+
+    if (this.getFromNegativeCache(cacheKey)) {
+      console.log(`⛔ Cache negativo: "${playerName}"`);
+      return null;
+    }
+
+    const encodedName = encodeURIComponent(playerName);
+    const endpointsToTry = [
+      this.endpoints[server] || this.endpoints.europe,
+      ...Object.values(this.endpoints).filter(e => e !== (this.endpoints[server] || this.endpoints.europe))
+    ];
+
+    for (let attempt = 0; attempt < this.maxRetries; attempt++) {
+      for (const endpoint of endpointsToTry) {
+        try {
+          console.log(`🌐 ${endpoint} (tentativa ${attempt + 1})`);
+          const path = `/api/gameinfo/search?q=${encodedName}`;
+          const result = await this.makeRequest(endpoint, path);
+
+          if (result.success) {
+            const playerData = this.processPlayerData(result.data, playerName);
+            if (playerData) {
+              console.log(`✅ Encontrado: ${playerData.name}`);
+              this.setCache(cacheKey, playerData);
+              this.recordSuccess();
+              return playerData;
+            } else {
+              console.log(`❌ Não encontrado`);
+              this.setNegativeCache(cacheKey);
+              return null;
+            }
+          }
+        } catch (error) {
+          console.error(`❌ ${endpoint}:`, error.type || error.message);
+          if (error.type === 'RATE_LIMIT') await this.delay(2000);
+        }
+      }
+      if (attempt < this.maxRetries - 1) await this.delay(1000 * (attempt + 1));
+    }
+
+    console.error('🔴 Todas falharam');
+    this.recordFailure();
+    return null;
+  }
+
+  processPlayerData(apiData, searchName) {
+    if (!apiData?.players?.length) return null;
+
+    const exactMatch = apiData.players.find(p => 
+      p.Name?.toLowerCase() === searchName.toLowerCase()
+    );
+    const player = exactMatch || apiData.players[0];
+
+    if (!player.Name) return null;
+
+    return {
+      id: player.Id,
+      name: player.Name,
+      guildId: player.GuildId || null,
+      guildName: player.GuildName || null,
+      allianceId: player.AllianceId || null,
+      allianceName: player.AllianceName || null,
+      avatar: player.Avatar || null,
+      avatarRing: player.AvatarRing || null,
+      killFame: player.KillFame || 0,
+      deathFame: player.DeathFame || 0,
+      searchedAt: new Date().toISOString()
+    };
+  }
+
+  async verifyPlayerGuild(playerName, guildName, server = 'europe') {
+    console.log(`\n🚀 Verificação: "${playerName}" -> "${guildName}"`);
+    const startTime = Date.now();
+
+    try {
       const player = await this.searchPlayer(playerName, server);
 
       if (!player) {
-        console.log(`❌ Player não encontrado na API`);
         return {
           valid: false,
-          error: `Jogador "${playerName}" não encontrado no servidor ${server}. O nick está correto?`,
-          details: null
+          error: `Jogador "${playerName}" não encontrado no servidor ${server}.`,
+          details: null,
+          apiStatus: 'NOT_FOUND',
+          responseTime: Date.now() - startTime
         };
       }
 
-      console.log(`✅ Player encontrado: ${player.name}`);
-      console.log(`   Guilda na API: ${player.guildName || 'Sem guilda'}`);
-      console.log(`   Guilda informada: ${guildName}`);
-
-      // Se não informou guilda ou informou "nenhuma"
-      if (!guildName || 
-          guildName.trim() === '' || 
-          guildName.toLowerCase() === 'nenhuma' ||
-          guildName.toLowerCase() === 'none') {
-        console.log(`✅ Validação básica OK (sem guilda)`);
+      // Sem guilda informada ou "nenhuma"
+      if (!guildName || ['nenhuma', 'none', ''].includes(guildName.toLowerCase().trim())) {
+        if (!player.guildId) {
+          return { valid: true, error: null, details: player, apiStatus: 'VALIDATED', responseTime: Date.now() - startTime };
+        }
         return {
-          valid: true,
-          error: null,
-          details: player
+          valid: false,
+          error: `Você informou "Nenhuma" guilda, mas o jogador está em "${player.guildName}".`,
+          details: player,
+          apiStatus: 'MISMATCH',
+          responseTime: Date.now() - startTime
         };
       }
 
-      // Se o player não tem guilda na API mas informou uma
+      // Jogador não tem guilda mas informou uma
       if (!player.guildId) {
         return {
           valid: false,
-          error: `O jogador "${playerName}" não está em nenhuma guilda no Albion, mas você informou "${guildName}".`,
-          details: player
+          error: `Jogador não está em nenhuma guilda, mas você informou "${guildName}".`,
+          details: player,
+          apiStatus: 'NO_GUILD',
+          responseTime: Date.now() - startTime
         };
       }
 
-      // Comparar guildas
-      const playerGuildLower = (player.guildName || '').toLowerCase();
-      const inputGuildLower = guildName.toLowerCase();
-
-      console.log(`🔍 Comparando: "${playerGuildLower}" vs "${inputGuildLower}"`);
-
-      const match = playerGuildLower === inputGuildLower ||
-                    playerGuildLower.includes(inputGuildLower) ||
-                    inputGuildLower.includes(playerGuildLower);
+      // Verificação de guilda (case insensitive e parcial)
+      const playerGuild = (player.guildName || '').toLowerCase().trim();
+      const inputGuild = guildName.toLowerCase().trim();
+      const match = playerGuild === inputGuild || 
+                    playerGuild.includes(inputGuild) || 
+                    inputGuild.includes(playerGuild);
 
       if (!match) {
         return {
           valid: false,
-          error: `Guilda incorreta. Você informou "${guildName}" mas o jogador está na guilda "${player.guildName}" no Albion.`,
-          details: player
+          error: `Guilda incorreta. Informado: "${guildName}" | Real: "${player.guildName}".`,
+          details: player,
+          apiStatus: 'GUILD_MISMATCH',
+          responseTime: Date.now() - startTime
         };
       }
 
-      console.log(`✅ Verificação completa OK!`);
-      return {
-        valid: true,
-        error: null,
-        details: player
-      };
+      return { valid: true, error: null, details: player, apiStatus: 'VALIDATED', responseTime: Date.now() - startTime };
 
     } catch (error) {
-      console.error(`❌ Erro na verificação:`, error);
+      console.error('❌ Erro:', error);
+      const isApiDown = this.circuitBreaker.state === 'OPEN';
       return {
         valid: false,
-        error: `Erro na API: ${error.message}. Tente novamente.`,
-        details: null
+        error: isApiDown ? 'API temporariamente indisponível. Análise manual necessária.' : `Erro: ${error.message}`,
+        details: null,
+        apiStatus: isApiDown ? 'API_UNAVAILABLE' : 'ERROR',
+        responseTime: Date.now() - startTime
       };
     }
+  }
+
+  // ==================== MÉTODOS ADICIONAIS (da versão services/) ====================
+
+  async getPlayerStats(playerId) {
+    try {
+      const endpoint = this.endpoints.europe;
+      const result = await this.makeRequest(endpoint, `/api/gameinfo/players/${playerId}`);
+      return result.success ? result.data : null;
+    } catch (error) {
+      console.error('[AlbionAPI] Error getPlayerStats:', error.message);
+      return null;
+    }
+  }
+
+  async getPlayerKills(playerId, limit = 10) {
+    try {
+      const endpoint = this.endpoints.europe;
+      const result = await this.makeRequest(endpoint, `/api/gameinfo/players/${playerId}/kills?limit=${limit}`);
+      return result.success ? result.data : [];
+    } catch (error) {
+      console.error('[AlbionAPI] Error getPlayerKills:', error.message);
+      return [];
+    }
+  }
+
+  async getGuildInfo(guildId) {
+    try {
+      const endpoint = this.endpoints.europe;
+      const result = await this.makeRequest(endpoint, `/api/gameinfo/guilds/${guildId}`);
+      return result.success ? result.data : null;
+    } catch (error) {
+      console.error('[AlbionAPI] Error getGuildInfo:', error.message);
+      return null;
+    }
+  }
+
+  async getGuildMembers(guildId) {
+    try {
+      const endpoint = this.endpoints.europe;
+      const result = await this.makeRequest(endpoint, `/api/gameinfo/guilds/${guildId}/members`);
+      return result.success ? result.data : [];
+    } catch (error) {
+      console.error('[AlbionAPI] Error getGuildMembers:', error.message);
+      return [];
+    }
+  }
+
+  async getGuildBattles(guildId, limit = 5) {
+    try {
+      const endpoint = this.endpoints.europe;
+      const result = await this.makeRequest(endpoint, `/api/gameinfo/guilds/${guildId}/battles?limit=${limit}`);
+      return result.success ? result.data : [];
+    } catch (error) {
+      console.error('[AlbionAPI] Error getGuildBattles:', error.message);
+      return [];
+    }
+  }
+
+  async comparePlayers(playerId1, playerId2) {
+    const [p1, p2] = await Promise.all([
+      this.getPlayerStats(playerId1),
+      this.getPlayerStats(playerId2)
+    ]);
+
+    if (!p1 || !p2) return null;
+
+    return {
+      player1: {
+        name: p1.Name,
+        fame: p1.LifetimeStatistics?.PvE?.Total || 0,
+        pvpFame: p1.LifetimeStatistics?.PvP?.Total || 0,
+        gatheringFame: p1.LifetimeStatistics?.Gathering?.All?.Total || 0
+      },
+      player2: {
+        name: p2.Name,
+        fame: p2.LifetimeStatistics?.PvE?.Total || 0,
+        pvpFame: p2.LifetimeStatistics?.PvP?.Total || 0,
+        gatheringFame: p2.LifetimeStatistics?.Gathering?.All?.Total || 0
+      }
+    };
+  }
+
+  async checkApiHealth() {
+    const results = {};
+    for (const [server, endpoint] of Object.entries(this.endpoints)) {
+      try {
+        const start = Date.now();
+        await this.makeRequest(endpoint, '/api/gameinfo/search?q=test');
+        results[server] = { status: 'UP', latency: Date.now() - start };
+      } catch (error) {
+        results[server] = { status: 'DOWN', error: error.type || error.message };
+      }
+    }
+    return results;
+  }
+
+  delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 }
 
