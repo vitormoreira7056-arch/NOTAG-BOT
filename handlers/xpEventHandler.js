@@ -210,12 +210,14 @@ class XpEventHandler {
         });
       }
 
+      // ✅ CORREÇÃO: Usar método correto do Database ao invés de propriedade inexistente
+      const eventHistory = await Database.getEventHistory(interaction.guild.id, 100);
+
       // Verificar eventos arquivados que correspondem ao nome
-      const eventHistory = Database.eventHistory || [];
       const matchingEvents = eventHistory.filter(e =>
         e.guildId === interaction.guild.id &&
-        e.dados?.nome?.toLowerCase().includes(eventData.nome.toLowerCase()) ||
-        eventData.nome.toLowerCase().includes(e.dados?.nome?.toLowerCase())
+        (e.dados?.eventoNome?.toLowerCase().includes(eventData.nome.toLowerCase()) ||
+         eventData.nome.toLowerCase().includes(e.dados?.eventoNome?.toLowerCase()))
       );
 
       // Para cada participante dos eventos matching, dar XP e insígnia

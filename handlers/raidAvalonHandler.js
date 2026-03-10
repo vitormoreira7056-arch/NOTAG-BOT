@@ -301,6 +301,7 @@ class RaidAvalonHandler {
 
       // Completar dados da raid
       raidData.id = eventId;
+      raidData.guildId = guild.id; // ✅ CORREÇÃO: Adicionado guildId
       raidData.criadorId = interaction.user.id;
       raidData.criadorTag = interaction.user.tag;
       raidData.canalVozId = canalVoz.id;
@@ -412,7 +413,7 @@ class RaidAvalonHandler {
 
       if (data.participantes && data.participantes.length > 0) {
         data.participantes.forEach(p => {
-          classesText += `  └ ${p.arma} - ${p.nick}\n`;
+          classesText += ` └ ${p.arma} - ${p.nick}\n`;
         });
       }
       classesText += '\n';
@@ -421,7 +422,7 @@ class RaidAvalonHandler {
     const embed = new EmbedBuilder()
       .setTitle(`${statusEmojis[raidData.status] || '⏳'} 🏰 RAID AVALON ┃ ${raidData.nome}`)
       .setDescription(
-        `> ${raidData.descricao}\n\n` +
+        `\> ${raidData.descricao}\n\n` +
         `**👤 Criador:** <@${raidData.criadorId}>\n` +
         `**🕐 Horário:** \`${raidData.horario}\`\n` +
         `**📊 Status:** ${raidData.status === 'aguardando' ? 'Aguardando' : 'Em Andamento'}\n` +
@@ -641,8 +642,8 @@ class RaidAvalonHandler {
       try {
         await interaction.reply({
           content: `✅ **Você entrou na raid como ${classKey.toUpperCase()}!**\n\n` +
-                   `⚔️ **Arma:** ${armaNome}\n` +
-                   `📋 **Set recomendado:**`,
+            `⚔️ **Arma:** ${armaNome}\n` +
+            `📋 **Set recomendado:**`,
           files: [armaImagePath, setSkipPath],
           ephemeral: true
         });
@@ -651,8 +652,8 @@ class RaidAvalonHandler {
         try {
           await interaction.reply({
             content: `✅ **Você entrou na raid como ${classKey.toUpperCase()}!**\n\n` +
-                     `⚔️ **Arma:** ${armaNome}\n` +
-                     `📋 **Set recomendado:**`,
+              `⚔️ **Arma:** ${armaNome}\n` +
+              `📋 **Set recomendado:**`,
             files: [setSkipPath],
             ephemeral: true
           });
@@ -660,8 +661,8 @@ class RaidAvalonHandler {
           // Se nem o set existir, envia sem imagens
           await interaction.reply({
             content: `✅ **Você entrou na raid como ${classKey.toUpperCase()}!**\n\n` +
-                     `⚔️ **Arma:** ${armaNome}\n\n` +
-                     `⚠️ *Imagens do set não encontradas.*`,
+              `⚔️ **Arma:** ${armaNome}\n\n` +
+              `⚠️ *Imagens do set não encontradas.*`,
             ephemeral: true
           });
         }
@@ -903,8 +904,10 @@ class RaidAvalonHandler {
         }
       }
 
+      // ✅ CORREÇÃO: Garantir guildId ao salvar em finishedEvents
       global.finishedEvents.set(raidId, {
         ...raidData,
+        guildId: raidData.guildId || interaction.guild.id, // Garantir guildId
         participantes: participantesMap,
         finalizadoEm: Date.now()
       });
@@ -1035,7 +1038,7 @@ class RaidAvalonHandler {
         ]
       });
 
-      await canal.send({ 
+      await canal.send({
         embeds: [embed],
         components: [botoes]
       });
