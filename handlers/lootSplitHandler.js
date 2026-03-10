@@ -10,12 +10,19 @@ const {
   PermissionFlagsBits
 } = require('discord.js');
 const Database = require('../utils/database');
+const XpHandler = require('./xpHandler'); // ✅ Importar XpHandler
 
 class LootSplitHandler {
   constructor() {
     this.simulations = new Map();
     this.pendingApprovals = new Map();
   }
+
+  // ✅ CONSTANTES DE XP
+  static XP_RATES = {
+    EVENTO_NORMAL: 1,      // 1 XP por minuto
+    RAID_AVALON: 2         // 2 XP por minuto (dobro)
+  };
 
   static createSimulationModal(eventId) {
     const modal = new ModalBuilder()
@@ -276,8 +283,12 @@ class LootSplitHandler {
       const admRole = interaction.guild.roles.cache.find(r => r.name === 'ADM');
       const staffRole = interaction.guild.roles.cache.find(r => r.name === 'Staff');
 
+      let mentions = '';
+      if (admRole) mentions += `<@&${admRole.id}> `;
+      if (staffRole) mentions += `<@&${staffRole.id}>`;
+
       await canalFinanceiro.send({
-        content: `🔔 <@&${admRole?.id}> <@&${staffRole?.id}> Nova solicitação de pagamento!`,
+        content: mentions ? `🔔 ${mentions} Nova solicitação de pagamento!` : '🔔 Nova solicitação de pagamento!',
         embeds: [embedAprovacao],
         components: [botoesAprovacao]
       });
@@ -342,85 +353,62 @@ class LootSplitHandler {
         });
       }
 
-      if (!aprovar) {
-        await interaction.update({
-          content: `❌ Pagamento recusado por ${interaction.user.tag}`,
-          components: []
-        });
-
-        const canalEvento = interaction.guild.channels.cache.get(simulation.canalEventoId);
-        if (canalEvento) {
-          await canalEvento.send({
-            embeds: [
-              new EmbedBuilder()
-                .setTitle('❌ PAGAMENTO RECUSADO')
-                .setDescription(`O pagamento foi recusado por <@${interaction.user.id}>`)
-                .setColor(0xE74C3C)
-            ]
-          });
-        }
-        return;
-      }
-
       await interaction.deferUpdate();
 
       let sucessos = 0;
       let falhas = 0;
+      const totalParticipantes = simulation.distribuicao.length;
 
-      // 🎯 CORREÇÃO: Usar await para adicionar saldo
-      for (const participante of simulation.distribuicao) {
-        try {
-          // 🎯 CORREÇÃO: Verificar se valor é válido
-          if (!participante.valor || participante.valor <= 0) {
-            console.log(`[LootSplit] Valor inválido para ${participante.userId}`);
-            continue;
-          }
+      const batchSize = 5;
+      for (let i = 0; i < simulation.distribuicao.length; i += batchSize) {
+        const batch = simulation.distribuicao.slice(i, i + batchSize);
 
-          // 🎯 CORREÇÃO: Usar await e verificar retorno
-          const sucesso = await Database.addSaldo(
-            participante.userId, 
-            participante.valor, 
-            `loot_split_evento_${simulation.eventId}`
-          );
-
-          if (sucesso) {
-            sucessos++;
-            console.log(`[LootSplit] +${participante.valor} adicionado para ${participante.userId}`);
-          } else {
-            falhas++;
-            console.error(`[LootSplit] Falha ao adicionar saldo para ${participante.userId}`);
-          }
-
-          // Notificar usuário por DM
+        await Promise.all(batch.map(async (participante) => {
           try {
-            const user = await interaction.client.users.fetch(participante.userId);
+            if (!participante.valor || participante.valor <= 0) {
+              console.log(`[LootSplit] Valor inválido para ${participante.userId}`);
+              return;
+            }
 
-            // 🎯 CORREÇÃO: Pegar saldo atualizado
-            const novoSaldo = await Database.getSaldo(participante.userId);
+            const sucesso = await Database.addSaldo(
+              participante.userId,
+              participante.valor,
+              `loot_split_evento_${simulation.eventId}`
+            );
 
-            const embed = new EmbedBuilder()
-              .setTitle('💰 PAGAMENTO RECEBIDO')
-              .setDescription(
-                `🎉 **Parabéns!** Você recebeu um pagamento!\n\n` +
-                `\> **Valor:** \`${participante.valor.toLocaleString()}\`\n` +
-                `\> **Evento:** ${simulation.eventId}\n` +
-                `\> **Data:** ${new Date().toLocaleString('pt-BR')}\n\n` +
-                `💎 **Seu Novo Saldo:** \`${novoSaldo.toLocaleString()}\``
-              )
-              .setColor(0x2ECC71)
-              .setTimestamp();
+            if (sucesso) {
+              sucessos++;
+              console.log(`[LootSplit] +${participante.valor} adicionado para ${participante.userId}`);
+            } else {
+              falhas++;
+              console.error(`[LootSplit] Falha ao adicionar saldo para ${participante.userId}`);
+            }
 
-            await user.send({ embeds: [embed] });
-          } catch (e) {
-            console.log(`[LootSplit] Could not DM user ${participante.userId}`);
+            interaction.client.users.fetch(participante.userId).then(user => {
+              Database.getSaldo(participante.userId).then(novoSaldo => {
+                const embed = new EmbedBuilder()
+                  .setTitle('💰 PAGAMENTO RECEBIDO')
+                  .setDescription(
+                    `🎉 **Parabéns!** Você recebeu um pagamento!\n\n` +
+                    `> **Valor:** \`${participante.valor.toLocaleString()}\`\n` +
+                    `> **Evento:** ${simulation.eventId}\n` +
+                    `> **Data:** ${new Date().toLocaleString('pt-BR')}\n\n` +
+                    `💎 **Seu Novo Saldo:** \`${novoSaldo.toLocaleString()}\``
+                  )
+                  .setColor(0x2ECC71)
+                  .setTimestamp();
+
+                user.send({ embeds: [embed] }).catch(() => {});
+              });
+            }).catch(() => {});
+
+          } catch (error) {
+            console.error(`[LootSplit] Error depositing to ${participante.userId}:`, error);
+            falhas++;
           }
-        } catch (error) {
-          console.error(`[LootSplit] Error depositing to ${participante.userId}:`, error);
-          falhas++;
-        }
+        }));
       }
 
-      // 🎯 CORREÇÃO: Registrar taxa da guilda se houver
       if (simulation.valorTaxa > 0) {
         await Database.addTransaction({
           type: 'credito',
@@ -430,8 +418,7 @@ class LootSplitHandler {
           guildId: interaction.guild.id,
           eventId: simulation.eventId,
           approvedBy: interaction.user.id,
-          approvedAt: Date.now(),
-          timestamp: Date.now()
+          approvedAt: Date.now()
         });
         console.log(`[LootSplit] Taxa guilda registrada: ${simulation.valorTaxa}`);
       }
@@ -500,6 +487,7 @@ class LootSplitHandler {
     }
   }
 
+  // ✅ ATUALIZADO: Distribuir XP proporcional ao tempo no arquivamento
   static async handleArquivar(interaction, eventId, simulationId) {
     try {
       console.log(`[LootSplit] Archiving event ${eventId} with simulation ${simulationId}`);
@@ -512,26 +500,115 @@ class LootSplitHandler {
         });
       }
 
-      const actualEventId = eventId || simulation.eventId;
+      // ✅ Determinar se é Raid Avalon ou Evento Normal
+      const eventData = global.finishedEvents?.get(simulation.eventId) || global.activeEvents?.get(simulation.eventId);
 
-      // 🎯 CORREÇÃO: Usar await para adicionar histórico
+      // Verificar se é raid avalon pelo ID ou pelos dados do evento
+      const isRaidAvalon = eventId?.includes('raid') || 
+                          simulation.eventId?.includes('raid') ||
+                          eventData?.tipo === 'raid_avalon';
+
+      // ✅ Definir taxa de XP baseado no tipo de evento
+      const xpRate = isRaidAvalon ? this.XP_RATES.RAID_AVALON : this.XP_RATES.EVENTO_NORMAL;
+      const eventoTipo = isRaidAvalon ? '🔥 RAID AVALON' : '⚔️ Evento Normal';
+
+      console.log(`[LootSplit] Arquivando ${eventoTipo} - Taxa XP: ${xpRate} XP/min`);
+
+      // ✅ DISTRIBUIR XP AOS PARTICIPANTES
+      let totalXpDistribuido = 0;
+      const canalLogXp = interaction.guild.channels.cache.find(c => c.name === '📜╠log-xp');
+
+      if (simulation.distribuicao && simulation.distribuicao.length > 0) {
+        console.log(`[LootSplit] Distribuindo XP para ${simulation.distribuicao.length} participantes...`);
+
+        for (const participante of simulation.distribuicao) {
+          try {
+            // Calcular tempo em minutos
+            const tempoMinutos = Math.floor((participante.tempo || 0) / 1000 / 60);
+
+            // Calcular XP (tempo em minutos × taxa)
+            const xpGanho = tempoMinutos * xpRate;
+
+            if (xpGanho > 0) {
+              // Adicionar XP usando o handler
+              await XpHandler.addXp(
+                participante.userId,
+                xpGanho,
+                `Participação em ${eventoTipo} - ${simulation.eventId}`,
+                interaction.guild,
+                canalLogXp
+              );
+
+              totalXpDistribuido += xpGanho;
+
+              // Notificar usuário por DM
+              try {
+                const user = await interaction.client.users.fetch(participante.userId);
+                const embedXp = new EmbedBuilder()
+                  .setTitle('🎉 XP RECEBIDO POR PARTICIPAÇÃO')
+                  .setDescription(
+                    `✨ **Você ganhou XP por participar de um evento!**\n\n` +
+                    `📅 **Evento:** ${eventoTipo}\n` +
+                    `⏱️ **Tempo Participado:** ${tempoMinutos} minutos\n` +
+                    `💎 **XP Ganho:** \`${xpGanho.toLocaleString()} XP\`\n` +
+                    `📈 **Taxa:** ${xpRate} XP/minuto\n\n` +
+                    `🎊 Continue participando dos eventos da guilda para subir de nível!`
+                  )
+                  .setColor(isRaidAvalon ? 0x9B59B6 : 0x2ECC71) // Roxo para raid, verde para normal
+                  .setTimestamp();
+
+                await user.send({ embeds: [embedXp] });
+              } catch (dmError) {
+                console.log(`[LootSplit] Não foi possível DM o usuário ${participante.userId}`);
+              }
+
+              console.log(`[LootSplit] +${xpGanho} XP para ${participante.userId} (${tempoMinutos}min)`);
+            }
+          } catch (xpError) {
+            console.error(`[LootSplit] Erro ao adicionar XP para ${participante.userId}:`, xpError);
+          }
+        }
+      }
+
+      // Salvar no histórico
       await Database.addEventHistory({
-        eventId: actualEventId,
+        eventId: eventId || simulation.eventId,
         simulationId: simulationId,
         guildId: interaction.guild.id,
         arquivadoPor: interaction.user.id,
         timestamp: Date.now(),
-        dados: simulation || {}
+        dados: {
+          ...simulation,
+          xpDistribuido: totalXpDistribuido,
+          tipoEvento: isRaidAvalon ? 'raid_avalon' : 'evento_normal',
+          xpRate: xpRate
+        }
       });
 
-      const canalEvento = interaction.guild.channels.cache.get(interaction.channel.id);
+      // Criar embed de confirmação do arquivamento com info de XP
+      const embedArquivamento = new EmbedBuilder()
+        .setTitle('📁 EVENTO ARQUIVADO')
+        .setDescription(
+          `✅ **Evento arquivado com sucesso!**\n\n` +
+          `🏷️ **Tipo:** ${eventoTipo}\n` +
+          `👥 **Participantes:** ${simulation.distribuicao?.length || 0}\n` +
+          `💰 **Valor Total:** \`${(simulation.valorTotal || 0).toLocaleString()}\`\n` +
+          `💎 **XP Total Distribuído:** \`${totalXpDistribuido.toLocaleString()} XP\`\n` +
+          `📈 **Taxa XP:** ${xpRate} XP/minuto\n` +
+          `👤 **Arquivado por:** <@${interaction.user.id}>`
+        )
+        .setColor(isRaidAvalon ? 0x9B59B6 : 0x3498DB)
+        .setTimestamp();
 
+      const canalEvento = interaction.guild.channels.cache.get(interaction.channel.id);
       if (canalEvento) {
         await interaction.update({
-          content: '📁 **EVENTO ARQUIVADO**',
+          content: '',
+          embeds: [embedArquivamento],
           components: []
         });
 
+        // Deletar canal após 10 segundos (aumentado para dar tempo de ver o embed)
         setTimeout(async () => {
           try {
             await canalEvento.delete('Evento arquivado');
@@ -539,8 +616,31 @@ class LootSplitHandler {
           } catch (e) {
             console.error('[LootSplit] Error deleting channel:', e);
           }
-        }, 5000);
+        }, 10000);
       }
+
+      // Log no canal de logs
+      const canalLogs = interaction.guild.channels.cache.find(c => c.name === '📜╠logs-banco');
+      if (canalLogs) {
+        await canalLogs.send({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle('📝 LOG: EVENTO ARQUIVADO')
+              .setDescription(
+                `**Evento:** ${eventId || simulation.eventId}\n` +
+                `**Tipo:** ${eventoTipo}\n` +
+                `**Arquivado por:** <@${interaction.user.id}>\n` +
+                `**XP Distribuído:** \`${totalXpDistribuido.toLocaleString()} XP\`\n` +
+                `**Taxa:** ${xpRate} XP/min\n` +
+                `**Data:** ${new Date().toLocaleString()}`
+              )
+              .setColor(isRaidAvalon ? 0x9B59B6 : 0x3498DB)
+              .setTimestamp()
+          ]
+        });
+      }
+
+      console.log(`[LootSplit] Evento arquivado. Total XP distribuído: ${totalXpDistribuido}`);
 
     } catch (error) {
       console.error(`[LootSplit] Error archiving event:`, error);
