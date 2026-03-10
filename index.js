@@ -1,13 +1,13 @@
 const {
- Client,
- GatewayIntentBits,
- Collection,
- REST,
- Routes,
- Events,
- PermissionFlagsBits,
- EmbedBuilder,
- ChannelType
+  Client,
+  GatewayIntentBits,
+  Collection,
+  REST,
+  Routes,
+  Events,
+  PermissionFlagsBits,
+  EmbedBuilder,
+  ChannelType
 } = require('discord.js');
 const fs = require('fs');
 require('dotenv').config();
@@ -81,6 +81,7 @@ global.activeRaids = new Map(); // NOVO - Raids Avalon ativas
 global.raidTemp = new Map(); // NOVO - Dados temporários de raid
 global.orbTemp = new Map(); // NOVO - Dados temporários de orb
 global.guildaRegistroTemp = new Map(); // NOVO - Dados temporários de registro de guilda
+global.pendingBauSales = new Map(); // ✅ CORREÇÃO: Adicionado para sistema de venda de baú
 global.client = client;
 
 // Carregar dados persistidos (blacklist e histórico)
@@ -647,9 +648,10 @@ client.on(Events.InteractionCreate, async interaction => {
 
       // LISTA DE MEMBROS (PAINEL ANTIGO - manter compatibilidade)
       if (customId === 'btn_atualizar_lista_membros') {
+        // ✅ CORREÇÃO: Usar handleAtualizar em vez de updatePanel que não existe
         await interaction.deferUpdate();
         const MemberListPanel = require('./handlers/memberListPanel');
-        await MemberListPanel.updatePanel(interaction.message, interaction.guild);
+        await MemberListPanel.handleAtualizar(interaction);
         return;
       }
 
