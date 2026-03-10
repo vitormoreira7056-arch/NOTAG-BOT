@@ -8,7 +8,7 @@ const {
 
 /**
  * Handler de Estatísticas de Eventos - Versão Corrigida
- * Usa global.finishedEvents em vez de buscar no SQLite
+ * Usa global.finishedEvents + Database em vez de buscar apenas na memória
  */
 
 class EventStatsHandler {
@@ -69,29 +69,83 @@ class EventStatsHandler {
   }
 
   /**
-   * Busca estatísticas de participação usando global.finishedEvents
+   * Busca estatísticas de participação usando global.finishedEvents + Database
    */
   static async getParticipationStats(guild, days, roleFilter = null) {
     try {
       const since = Date.now() - (days * 24 * 60 * 60 * 1000);
 
-      // Buscar eventos finalizados do global.finishedEvents
+      // ✅ CORREÇÃO: Buscar eventos tanto da memória quanto do banco de dados
       let events = [];
+
+      // 1. Buscar de global.finishedEvents (memória)
       if (global.finishedEvents && global.finishedEvents.size > 0) {
-        events = Array.from(global.finishedEvents.values()).filter(event => {
+        const memoryEvents = Array.from(global.finishedEvents.values()).filter(event => {
           const eventDate = event.finalizadoEm || event.created_at || 0;
-          return eventDate > since && event.guildId === guild.id;
+          const matchesGuild = event.guildId === guild.id;
+          const matchesDate = days === 0 ? true : eventDate > since;
+          return matchesGuild && matchesDate;
         });
+        events = [...events, ...memoryEvents];
+        console.log(`[EventStats] Encontrados ${memoryEvents.length} eventos na memória`);
       }
 
-      // Também verificar eventos ativos se necessário
+      // 2. Buscar do banco de dados (event_history)
+      try {
+        const Database = require('../utils/database');
+        const historyEvents = await Database.getEventHistory(guild.id, 100);
+
+        for (const historyEntry of historyEvents) {
+          const eventDate = historyEntry.timestamp || 0;
+          if (days === 0 || eventDate > since) {
+            // Converter dados do banco para formato compatível
+            const dados = historyEntry.dados || {};
+            const eventData = {
+              id: historyEntry.event_id,
+              guildId: historyEntry.guild_id,
+              finalizadoEm: historyEntry.timestamp,
+              nome: dados.eventoNome || 'Evento Arquivado',
+              participantes: new Map()
+            };
+
+            // Converter participantes do array para Map
+            if (dados.distribuicao && Array.isArray(dados.distribuicao)) {
+              for (const participante of dados.distribuicao) {
+                if (participante.userId) {
+                  eventData.participantes.set(participante.userId, {
+                    nick: participante.nick || 'Unknown',
+                    userId: participante.userId,
+                    tempoTotal: participante.tempo || 0
+                  });
+                }
+              }
+            }
+
+            // Verificar se já não existe na lista (evitar duplicatas)
+            const exists = events.some(e => e.id === eventData.id);
+            if (!exists) {
+              events.push(eventData);
+            }
+          }
+        }
+        console.log(`[EventStats] Encontrados ${historyEvents.length} eventos no banco de dados`);
+      } catch (dbError) {
+        console.error('[EventStats] Erro ao buscar do banco:', dbError);
+      }
+
+      // 3. Também verificar eventos ativos se necessário (opcional)
       if (global.activeEvents && global.activeEvents.size > 0) {
         const activeEvents = Array.from(global.activeEvents.values()).filter(event => {
           const eventDate = event.inicioTimestamp || Date.now();
-          return eventDate > since && event.guildId === guild.id;
+          const matchesGuild = event.guildId === guild.id || !event.guildId; // Incluir se não tiver guildId (compatibilidade)
+          const matchesDate = days === 0 ? true : eventDate > since;
+          return matchesGuild && matchesDate;
         });
         events = [...events, ...activeEvents];
+        console.log(`[EventStats] Encontrados ${activeEvents.length} eventos ativos`);
       }
+
+      console.log(`[EventStats] Total de eventos encontrados: ${events.length}`);
 
       const participacao = new Map();
       let totalLoot = 0;

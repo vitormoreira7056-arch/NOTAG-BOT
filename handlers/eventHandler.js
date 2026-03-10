@@ -84,6 +84,7 @@ class EventHandler {
 
       const eventData = {
         id: eventId,
+        guildId: guild.id, // ✅ CORREÇÃO: Adicionado guildId
         nome: nome,
         descricao: descricao,
         requisitos: requisitos,
@@ -120,7 +121,7 @@ class EventHandler {
       console.log(`⚔️ Evento criado: ${nome} por ${interaction.user.tag}`);
 
     } catch (error) {
-      console.error('❌ Erro ao criar evento:', error);
+      console.error('[handleCreateEvent] Erro ao criar evento:', error);
       await interaction.editReply({
         content: '❌ Erro ao criar evento. Verifique as permissões do bot.'
       });
@@ -159,7 +160,7 @@ class EventHandler {
     const embed = new EmbedBuilder()
       .setTitle(`${statusEmojis[eventData.status]} ┃ ${eventData.nome}`)
       .setDescription(
-        `> ${eventData.descricao}\n\n` +
+        `\> ${eventData.descricao}\n\n` +
         `**👤 Criador:** <@${eventData.criadorId}>\n` +
         `**🕐 Horário:** \`${eventData.horario}\`\n` +
         `**📊 Status:** ${statusTextos[eventData.status]}\n` +
@@ -318,7 +319,7 @@ class EventHandler {
       });
 
     } catch (error) {
-      console.error('Erro ao atualizar painel:', error);
+      console.error('[updateEventPanel] Erro ao atualizar painel:', error);
     }
   }
 
@@ -411,7 +412,7 @@ class EventHandler {
       });
 
     } catch (error) {
-      console.error('Erro ao participar:', error);
+      console.error('[handleParticipar] Erro ao participar:', error);
       await interaction.reply({ content: '❌ Erro ao participar do evento.', ephemeral: true });
     }
   }
@@ -425,9 +426,9 @@ class EventHandler {
 
       const participante = eventData.participantes.get(interaction.user.id);
       if (!participante) {
-        return interaction.reply({ 
-          content: '❌ Você não está participando deste evento! Clique em "Entrar no Evento" primeiro.', 
-          ephemeral: true 
+        return interaction.reply({
+          content: '❌ Você não está participando deste evento! Clique em "Entrar no Evento" primeiro.',
+          ephemeral: true
         });
       }
 
@@ -460,7 +461,7 @@ class EventHandler {
       }
 
     } catch (error) {
-      console.error('Erro ao pausar:', error);
+      console.error('[handlePausar] Erro ao pausar:', error);
       await interaction.reply({ content: '❌ Erro ao pausar participação.', ephemeral: true });
     }
   }
@@ -499,7 +500,7 @@ class EventHandler {
       });
 
     } catch (error) {
-      console.error('Erro ao iniciar:', error);
+      console.error('[handleIniciar] Erro ao iniciar:', error);
       await interaction.reply({ content: '❌ Erro ao iniciar evento.', ephemeral: true });
     }
   }
@@ -545,7 +546,7 @@ class EventHandler {
       await this.updateEventPanel(interaction, eventData);
 
     } catch (error) {
-      console.error('Erro ao pausar/retomar global:', error);
+      console.error('[handlePausarGlobal] Erro ao pausar/retomar global:', error);
       await interaction.reply({ content: '❌ Erro ao pausar evento.', ephemeral: true });
     }
   }
@@ -579,7 +580,7 @@ class EventHandler {
       });
 
     } catch (error) {
-      console.error('Erro ao trancar:', error);
+      console.error('[handleTrancar] Erro ao trancar:', error);
       await interaction.reply({ content: '❌ Erro ao trancar evento.', ephemeral: true });
     }
   }
@@ -620,15 +621,18 @@ class EventHandler {
       });
 
     } catch (error) {
-      console.error('Erro ao cancelar:', error);
+      console.error('[handleCancelar] Erro ao cancelar:', error);
       await interaction.reply({ content: '❌ Erro ao cancelar evento.', ephemeral: true });
     }
   }
 
   static async handleFinalizar(interaction, eventId) {
     try {
+      console.log(`[handleFinalizar] Iniciando finalização do evento ${eventId} por ${interaction.user.id}`);
+
       const eventData = global.activeEvents.get(eventId);
       if (!eventData) {
+        console.error(`[handleFinalizar] Evento ${eventId} não encontrado em global.activeEvents`);
         return interaction.reply({ content: '❌ Evento não encontrado!', ephemeral: true });
       }
 
@@ -636,6 +640,7 @@ class EventHandler {
       const isStaff = interaction.member.roles.cache.some(r => ['ADM', 'Staff'].includes(r.name));
 
       if (!isCriador && !isStaff) {
+        console.warn(`[handleFinalizar] Permissão negada para ${interaction.user.id}`);
         return interaction.reply({
           content: '❌ Apenas o criador ou staff pode finalizar!',
           ephemeral: true
@@ -652,6 +657,7 @@ class EventHandler {
       }
 
       eventData.finalizadoEm = Date.now();
+      eventData.status = 'encerrado';
 
       // Mover todos para "Aguardando-Evento"
       const canalAguardando = interaction.guild.channels.cache.find(
@@ -667,7 +673,7 @@ class EventHandler {
             try {
               await member.voice.setChannel(canalAguardando.id);
             } catch (e) {
-              console.log(`Não foi possível mover ${memberId}`);
+              console.log(`[handleFinalizar] Não foi possível mover ${memberId}`);
             }
           }
         }
@@ -687,13 +693,17 @@ class EventHandler {
         if (msg) await msg.delete();
       }
 
+      // ✅ CORREÇÃO: Garantir que guildId está presente antes de salvar
+      const eventDataToSave = {
+        ...eventData,
+        guildId: eventData.guildId || interaction.guild.id, // Garantir guildId
+        participantes: new Map(eventData.participantes) // Preservar Map
+      };
+
       // Salvar em eventos finalizados antes de deletar
       if (!global.finishedEvents) global.finishedEvents = new Map();
-      global.finishedEvents.set(eventId, {
-        ...eventData,
-        finalizadoEm: Date.now()
-      });
-      console.log(`[EventHandler] Event ${eventId} saved to finishedEvents`);
+      global.finishedEvents.set(eventId, eventDataToSave);
+      console.log(`[EventHandler] Event ${eventId} saved to finishedEvents with guildId: ${eventDataToSave.guildId}`);
 
       global.activeEvents.delete(eventId);
 
@@ -703,7 +713,7 @@ class EventHandler {
       });
 
     } catch (error) {
-      console.error('Erro ao finalizar:', error);
+      console.error('[handleFinalizar] Erro ao finalizar:', error);
       await interaction.reply({ content: '❌ Erro ao finalizar evento.', ephemeral: true });
     }
   }
@@ -780,7 +790,7 @@ class EventHandler {
       const embedResumo = new EmbedBuilder()
         .setTitle(`✅ ┃ ${eventData.nome.toUpperCase()}`)
         .setDescription(
-          `> ${eventData.descricao}\n\n` +
+          `\> ${eventData.descricao}\n\n` +
           `**👤 Criador:** <@${eventData.criadorId}>\n` +
           `**🕐 Horário:** \`${eventData.horario}\`\n` +
           `**⏱️ Duração Total:** \`${tempoTotalMin}\` minutos\n` +
