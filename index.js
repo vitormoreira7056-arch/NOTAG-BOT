@@ -28,7 +28,16 @@ const PerfilHandler = require('./handlers/perfilHandler');
 const OrbHandler = require('./handlers/orbHandler');
 const XpHandler = require('./handlers/xpHandler');
 const XpEventHandler = require('./handlers/xpEventHandler');
-const RaidAvalonHandler = require('./handlers/raidAvalonHandler'); // NOVO
+const RaidAvalonHandler = require('./handlers/raidAvalonHandler');
+
+// ==================== IMPORTAR COMANDOS ====================
+const instalarCommand = require('./commands/instalar');
+const desistalarCommand = require('./commands/desistalar');
+const atualizarCommand = require('./commands/atualizar');
+const limparEventosCommand = require('./commands/limpar-eventos');
+const limparSaldoCommand = require('./commands/limpar-saldo');
+const limparXpCommand = require('./commands/limpar-xp');
+const ajudaCommand = require('./commands/ajuda'); // ✅ NOVO: Comando de ajuda
 
 // Criar cliente
 const client = new Client({
@@ -47,14 +56,6 @@ const client = new Client({
 // Coleção de comandos
 client.commands = new Collection();
 
-// ==================== IMPORTAR COMANDOS ====================
-const instalarCommand = require('./commands/instalar');
-const desistalarCommand = require('./commands/desistalar');
-const atualizarCommand = require('./commands/atualizar');
-const limparEventosCommand = require('./commands/limpar-eventos');
-const limparSaldoCommand = require('./commands/limpar-saldo');
-const limparXpCommand = require('./commands/limpar-xp');
-
 // Registrar comandos na coleção
 client.commands.set(instalarCommand.data.name, instalarCommand);
 client.commands.set(desistalarCommand.data.name, desistalarCommand);
@@ -62,6 +63,7 @@ client.commands.set(atualizarCommand.data.name, atualizarCommand);
 client.commands.set(limparEventosCommand.data.name, limparEventosCommand);
 client.commands.set(limparSaldoCommand.data.name, limparSaldoCommand);
 client.commands.set(limparXpCommand.data.name, limparXpCommand);
+client.commands.set(ajudaCommand.data.name, ajudaCommand); // ✅ NOVO: Registrar comando de ajuda
 
 // ==================== INICIALIZAR VARIÁVEIS GLOBAIS ====================
 global.registrosPendentes = new Map();
@@ -77,11 +79,11 @@ global.pendingLoans = new Map();
 global.pendingTransfers = new Map();
 global.pendingOrbDeposits = new Map();
 global.activeXpEvents = new Map();
-global.activeRaids = new Map(); // NOVO - Raids Avalon ativas
-global.raidTemp = new Map(); // NOVO - Dados temporários de raid
-global.orbTemp = new Map(); // NOVO - Dados temporários de orb
-global.guildaRegistroTemp = new Map(); // NOVO - Dados temporários de registro de guilda
-global.pendingBauSales = new Map(); // ✅ CORREÇÃO: Adicionado para sistema de venda de baú
+global.activeRaids = new Map();
+global.raidTemp = new Map();
+global.orbTemp = new Map();
+global.guildaRegistroTemp = new Map();
+global.pendingBauSales = new Map();
 global.client = client;
 
 // Carregar dados persistidos (blacklist e histórico)
@@ -124,7 +126,8 @@ client.once(Events.ClientReady, async () => {
     atualizarCommand.data.toJSON(),
     limparEventosCommand.data.toJSON(),
     limparSaldoCommand.data.toJSON(),
-    limparXpCommand.data.toJSON()
+    limparXpCommand.data.toJSON(),
+    ajudaCommand.data.toJSON() // ✅ NOVO: Registrar comando de ajuda no Discord
   ];
 
   const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
@@ -147,23 +150,17 @@ client.once(Events.ClientReady, async () => {
 // ==================== VERIFICAÇÃO DE ENTRADA EM CALL DE EVENTO ====================
 client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   try {
-    // Se não entrou em um canal (saiu ou mudou), ignorar
     if (!newState.channelId) return;
-
-    // Se entrou no mesmo canal (não mudou), ignorar
     if (oldState.channelId === newState.channelId) return;
 
     const member = newState.member;
     const channel = newState.channel;
 
-    // Verificar se é um canal de evento (começa com ⚔️- ou 🏰-)
     if (!channel.name.startsWith('⚔️-') && !channel.name.startsWith('🏰-')) return;
 
-    // Verificar se o usuário está em algum evento ativo
     let isParticipating = false;
     let eventData = null;
 
-    // Verificar em todos os eventos ativos
     for (const [eventId, event] of global.activeEvents) {
       if (event.canalVozId === channel.id) {
         eventData = event;
@@ -174,10 +171,8 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
       }
     }
 
-    // Verificar em raids ativas também
     for (const [raidId, raid] of global.activeRaids || []) {
       if (raid.canalVozId === channel.id) {
-        // Verificar se está em alguma classe
         for (const classe of Object.values(raid.classes || {})) {
           if (classe.participantes?.find(p => p.userId === member.id)) {
             isParticipating = true;
@@ -188,11 +183,9 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
       }
     }
 
-    // Se não está participando, remover da call
     if (!isParticipating && eventData) {
       console.log(`[VoiceState] Usuário ${member.id} tentou entrar na call ${channel.id} sem participar do evento`);
 
-      // Tentar mover para "Aguardando-Evento" ou desconectar
       const canalAguardando = newState.guild.channels.cache.find(
         c => c.name === '🔊╠Aguardando-Evento' && c.type === ChannelType.GuildVoice
       );
@@ -210,7 +203,6 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
           }
         }
       } else {
-        // Se não tem canal de aguardar, desconectar
         try {
           await member.voice.disconnect('Não está participando do evento');
         } catch (e) {
@@ -218,7 +210,6 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
         }
       }
 
-      // Enviar DM explicando
       try {
         await member.send({
           embeds: [
@@ -232,9 +223,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
               .setTimestamp()
           ]
         });
-      } catch (e) {
-        // Se não puder enviar DM, ignorar
-      }
+      } catch (e) {}
     }
 
   } catch (error) {
@@ -245,7 +234,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 // ==================== HANDLER PRINCIPAL DE INTERAÇÕES ====================
 client.on(Events.InteractionCreate, async interaction => {
   try {
-    // ==================== COMANDOS SLASH ====================
+    // COMANDOS SLASH
     if (interaction.isChatInputCommand()) {
       const command = client.commands.get(interaction.commandName);
 
@@ -287,15 +276,15 @@ client.on(Events.InteractionCreate, async interaction => {
       return;
     }
 
-    // ==================== BOTÕES ====================
+    // BOTÕES
     if (interaction.isButton()) {
       const customId = interaction.customId;
 
-      // COMANDOS DE LIMPAR - Confirmações (são tratados pelos collectors dos comandos)
+      // COMANDOS DE LIMPAR - Confirmações
       if (customId === 'confirmar_limpar_eventos' || customId === 'cancelar_limpar_eventos' ||
           customId === 'confirmar_limpar_saldo' || customId === 'cancelar_limpar_saldo' ||
           customId === 'confirmar_limpar_xp' || customId === 'cancelar_limpar_xp') {
-        return; // Ignorar aqui, o collector do comando vai processar
+        return;
       }
 
       // SISTEMA DE REGISTRO
@@ -341,14 +330,13 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // SISTEMA DE EVENTOS - Painel Principal
+      // SISTEMA DE EVENTOS
       if (customId === 'btn_criar_evento') {
         const modal = EventPanel.createEventModal();
         await interaction.showModal(modal);
         return;
       }
 
-      // RAID AVALON - ATIVADO!
       if (customId === 'btn_raid_avalon') {
         const modal = EventPanel.createRaidAvalonModal();
         await interaction.showModal(modal);
@@ -363,10 +351,9 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // RAID AVALON - Configuração de classes
+      // RAID AVALON
       if (customId.startsWith('raid_config_')) {
         const action = customId.replace('raid_config_', '');
-
         if (action === 'finalizar') {
           await RaidAvalonHandler.createRaid(interaction);
         } else {
@@ -375,7 +362,6 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // RAID AVALON - Botões de controle
       if (customId.startsWith('raid_iniciar_')) {
         const raidId = customId.replace('raid_iniciar_', '');
         await RaidAvalonHandler.handleIniciar(interaction, raidId);
@@ -394,7 +380,7 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // SISTEMA DE EVENTOS - Ações do Evento
+      // SISTEMA DE EVENTOS - Ações
       if (customId.startsWith('evt_participar_')) {
         const eventId = customId.replace('evt_participar_', '');
         await EventHandler.handleParticipar(interaction, eventId);
@@ -443,7 +429,7 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // SISTEMA DE LOOTSPLIT
+      // LOOTSPLIT
       if (customId.startsWith('loot_simular_')) {
         const eventId = customId.replace('loot_simular_', '');
         const modal = LootSplitHandler.createSimulationModal(eventId);
@@ -478,19 +464,15 @@ client.on(Events.InteractionCreate, async interaction => {
       if (customId.startsWith('loot_arquivar_')) {
         const simulationId = customId.replace('loot_arquivar_', '');
         const simulation = global.simulations?.get(simulationId);
-
         if (simulation) {
           await LootSplitHandler.handleArquivar(interaction, simulation.eventId, simulationId);
         } else {
-          await interaction.reply({
-            content: '❌ Simulação não encontrada!',
-            ephemeral: true
-          });
+          await interaction.reply({ content: '❌ Simulação não encontrada!', ephemeral: true });
         }
         return;
       }
 
-      // SISTEMA DE DEPÓSITO
+      // DEPÓSITO
       if (customId === 'btn_deposito_novo') {
         await DepositHandler.handleDepositoButton(interaction);
         return;
@@ -517,10 +499,7 @@ client.on(Events.InteractionCreate, async interaction => {
           interaction.member.permissions.has(PermissionFlagsBits.Administrator);
 
         if (!isTesoureiro) {
-          return interaction.reply({
-            content: '❌ Apenas tesoureiros podem aprovar depósitos!',
-            ephemeral: true
-          });
+          return interaction.reply({ content: '❌ Apenas tesoureiros podem aprovar depósitos!', ephemeral: true });
         }
 
         await DepositHandler.handleAprovacao(interaction, depositId, userId, valor, true);
@@ -529,16 +508,12 @@ client.on(Events.InteractionCreate, async interaction => {
 
       if (customId.startsWith('dep_recusar_')) {
         const depositId = customId.replace('dep_recusar_', '');
-
         const isTesoureiro = interaction.member.roles.cache.some(r => r.name === 'tesoureiro') ||
           interaction.member.roles.cache.some(r => r.name === 'ADM') ||
           interaction.member.permissions.has(PermissionFlagsBits.Administrator);
 
         if (!isTesoureiro) {
-          return interaction.reply({
-            content: '❌ Apenas tesoureiros podem recusar depósitos!',
-            ephemeral: true
-          });
+          return interaction.reply({ content: '❌ Apenas tesoureiros podem recusar depósitos!', ephemeral: true });
         }
 
         await DepositHandler.handleAprovacao(interaction, depositId, null, null, false);
@@ -547,14 +522,11 @@ client.on(Events.InteractionCreate, async interaction => {
 
       if (customId.startsWith('dep_verificar_')) {
         const comprovante = customId.replace('dep_verificar_', '');
-        await interaction.reply({
-          content: `📎 **Comprovante:** ${comprovante}`,
-          ephemeral: true
-        });
+        await interaction.reply({ content: `📎 **Comprovante:** ${comprovante}`, ephemeral: true });
         return;
       }
 
-      // SISTEMA DE CONSULTAR SALDO
+      // CONSULTAR SALDO
       if (customId === 'btn_consultar_saldo') {
         await ConsultarSaldoHandler.handleConsultarSaldo(interaction);
         return;
@@ -575,7 +547,7 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // SISTEMA FINANCEIRO - Aprovações/Recusas
+      // FINANCEIRO
       if (customId.startsWith('fin_confirmar_saque_')) {
         const withdrawalId = customId.replace('fin_confirmar_saque_', '');
         await FinanceHandler.handleConfirmWithdrawal(interaction, withdrawalId);
@@ -612,7 +584,7 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // ALBION ACADEMY - PERFIL
+      // ALBION ACADEMY
       if (customId === 'btn_criar_xp_event') {
         await XpEventHandler.showCreateEventModal(interaction);
         return;
@@ -628,7 +600,6 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // ALBION ACADEMY - ORBS
       if (customId === 'btn_depositar_orb') {
         await OrbHandler.showUserSelect(interaction);
         return;
@@ -646,16 +617,14 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // LISTA DE MEMBROS (PAINEL ANTIGO - manter compatibilidade)
+      // LISTA DE MEMBROS
       if (customId === 'btn_atualizar_lista_membros') {
-        // ✅ CORREÇÃO: Usar handleAtualizar em vez de updatePanel que não existe
         await interaction.deferUpdate();
         const MemberListPanel = require('./handlers/memberListPanel');
         await MemberListPanel.handleAtualizar(interaction);
         return;
       }
 
-      // PAINEL DE LISTA DE MEMBROS (NOVOS HANDLERS)
       if (customId === 'btn_mlist_atualizar') {
         const MemberListPanel = require('./handlers/memberListPanel');
         await MemberListPanel.handleAtualizar(interaction);
@@ -697,7 +666,7 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // PAINEL DE ESTATÍSTICAS DE EVENTOS
+      // ESTATÍSTICAS DE EVENTOS
       if (customId === 'btn_eventos_atualizar') {
         const EventStatsHandler = require('./handlers/eventStatsHandler');
         await EventStatsHandler.handleAtualizar(interaction);
@@ -705,18 +674,12 @@ client.on(Events.InteractionCreate, async interaction => {
       }
 
       if (customId === 'btn_eventos_exportar') {
-        await interaction.reply({
-          content: '⏳ Exportação de dados em desenvolvimento...',
-          ephemeral: true
-        });
+        await interaction.reply({ content: '⏳ Exportação de dados em desenvolvimento...', ephemeral: true });
         return;
       }
 
       if (customId === 'btn_eventos_ajuda') {
-        await interaction.reply({
-          content: '❓ **Painel de Eventos**\n\nUse os menus acima para filtrar eventos por período ou cargo.',
-          ephemeral: true
-        });
+        await interaction.reply({ content: '❓ **Painel de Eventos**\n\nUse os menus acima para filtrar eventos por período ou cargo.', ephemeral: true });
         return;
       }
 
@@ -751,7 +714,6 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // GUILDA REGISTRO - NOVOS BOTÕES
       if (customId.startsWith('confirmar_guilda_')) {
         const parts = customId.replace('confirmar_guilda_', '').split('_');
         const server = parts[0];
@@ -765,7 +727,7 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // XP EVENT - Botões de finalizar/cancelar
+      // XP EVENT
       if (customId.startsWith('xp_event_finalizar_')) {
         const eventId = customId.replace('xp_event_finalizar_', '');
         await XpEventHandler.finalizarXpEvent(interaction, eventId);
@@ -779,9 +741,8 @@ client.on(Events.InteractionCreate, async interaction => {
       }
     }
 
-    // ==================== SELECT MENUS ====================
+    // SELECT MENUS
     if (interaction.isStringSelectMenu()) {
-      // REGISTRO
       if (interaction.customId === 'select_server_registro') {
         await RegistrationModal.processServerSelect(interaction);
         return;
@@ -792,13 +753,11 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // CONFIGURAÇÕES
       if (interaction.customId === 'select_taxa_guilda') {
         await ConfigActions.handleTaxaSelect(interaction);
         return;
       }
 
-      // ALBION ACADEMY - ORBS
       if (interaction.customId === 'select_orb_type') {
         const orbType = interaction.values[0];
         if (!global.orbTemp) global.orbTemp = new Map();
@@ -807,7 +766,6 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // PAINEL DE ESTATÍSTICAS DE EVENTOS
       if (interaction.customId === 'select_periodo_eventos') {
         const EventStatsHandler = require('./handlers/eventStatsHandler');
         await EventStatsHandler.handlePeriodSelect(interaction);
@@ -820,7 +778,6 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // PAINEL LISTA DE MEMBROS - FILTROS
       if (interaction.customId === 'mlist_filter_cargo') {
         const MemberListPanel = require('./handlers/memberListPanel');
         await MemberListPanel.handleFilterSelect(interaction);
@@ -833,7 +790,6 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // RAID AVALON - Seleção de classe
       if (interaction.customId.startsWith('raid_select_class_')) {
         const raidId = interaction.customId.replace('raid_select_class_', '');
         const classKey = interaction.values[0];
@@ -841,7 +797,6 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // RAID AVALON - Seleção de arma
       if (interaction.customId.startsWith('raid_select_weapon_')) {
         const parts = interaction.customId.replace('raid_select_weapon_', '').split('_');
         const raidId = parts[0] + '_' + parts[1] + '_' + parts[2];
@@ -851,23 +806,27 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // GUILDA REGISTRO - Seleção de servidor
       if (interaction.customId === 'select_server_guilda') {
         await ConfigActions.processGuildaServerSelect(interaction);
         return;
       }
+
+      // ✅ NOVO: Handler para menu de ajuda
+      if (interaction.customId === 'ajuda_menu') {
+        // Este handler é gerenciado dentro do próprio comando ajuda.js
+        // Não precisa de tratamento aqui pois o comando cria seu próprio collector
+        return;
+      }
     }
 
-    // ==================== USER SELECT MENUS ====================
+    // USER SELECT MENUS
     if (interaction.isUserSelectMenu()) {
-      // ALBION ACADEMY - XP MANUAL
       if (interaction.customId === 'select_xp_target_user') {
         const targetUserId = interaction.values[0];
         await PerfilHandler.createManualXpModal(interaction, targetUserId);
         return;
       }
 
-      // ALBION ACADEMY - ORBS
       if (interaction.customId === 'select_orb_users') {
         const selectedUsers = interaction.values;
         if (!global.orbTemp) global.orbTemp = new Map();
@@ -879,9 +838,8 @@ client.on(Events.InteractionCreate, async interaction => {
       }
     }
 
-    // ==================== MODALS ====================
+    // MODALS
     if (interaction.isModalSubmit()) {
-      // SISTEMA DE REGISTRO
       if (interaction.customId === 'modal_registro') {
         const nick = interaction.fields.getTextInputValue('reg_nick').trim();
         const erros = await RegistrationActions.checkExistingRegistration(
@@ -914,13 +872,11 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // SISTEMA DE EVENTOS
       if (interaction.customId === 'modal_criar_evento') {
         await EventHandler.createEvent(interaction);
         return;
       }
 
-      // RAID AVALON - Modal inicial
       if (interaction.customId === 'modal_raid_avalon') {
         try {
           const nome = interaction.fields.getTextInputValue('raid_nome');
@@ -940,35 +896,28 @@ client.on(Events.InteractionCreate, async interaction => {
           return;
         } catch (error) {
           console.error('[Index] Error processing raid modal:', error);
-          await interaction.reply({
-            content: '❌ Erro ao processar formulário da raid.',
-            ephemeral: true
-          });
+          await interaction.reply({ content: '❌ Erro ao processar formulário da raid.', ephemeral: true });
           return;
         }
       }
 
-      // RAID AVALON - Limite de classe
       if (interaction.customId.startsWith('raid_limit_')) {
         const classKey = interaction.customId.replace('raid_limit_', '');
         await RaidAvalonHandler.processClassLimit(interaction, classKey);
         return;
       }
 
-      // SISTEMA DE LOOTSPLIT
       if (interaction.customId.startsWith('modal_simular_evento_')) {
         const eventId = interaction.customId.replace('modal_simular_evento_', '');
         await LootSplitHandler.processSimulation(interaction, eventId);
         return;
       }
 
-      // SISTEMA DE DEPÓSITO
       if (interaction.customId === 'modal_deposito_valor') {
         await DepositHandler.processDeposito(interaction);
         return;
       }
 
-      // MODAIS DE FINANÇAS
       if (interaction.customId === 'modal_sacar_saldo') {
         await FinanceHandler.processWithdrawRequest(interaction);
         return;
@@ -990,14 +939,12 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // ALBION ACADEMY - XP MANUAL
       if (interaction.customId.startsWith('modal_depositar_xp_')) {
         const targetUserId = interaction.customId.replace('modal_depositar_xp_', '');
         await PerfilHandler.processManualXpDeposit(interaction, targetUserId);
         return;
       }
 
-      // ALBION ACADEMY - ORBS
       if (interaction.customId.startsWith('modal_depositar_orb_')) {
         const parts = interaction.customId.replace('modal_depositar_orb_', '').split('_');
         const orbType = parts[0];
@@ -1006,7 +953,6 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // CONFIGURAÇÕES
       if (interaction.customId === 'modal_taxa_guilda') {
         await ConfigActions.handleTaxaSelect(interaction);
         return;
@@ -1022,13 +968,11 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // GUILDA REGISTRO - Modal do nome
       if (interaction.customId === 'modal_registrar_guilda_nome') {
         await ConfigActions.processGuildaNome(interaction);
         return;
       }
 
-      // XP EVENT - Criação de evento
       if (interaction.customId === 'modal_criar_xp_event') {
         await XpEventHandler.processCreateXpEvent(interaction);
         return;
@@ -1045,9 +989,7 @@ client.on(Events.InteractionCreate, async interaction => {
           ephemeral: true
         });
       } else if (interaction.isRepliable() && interaction.deferred && !interaction.replied) {
-        await interaction.editReply({
-          content: '❌ Ocorreu um erro inesperado. Tente novamente.'
-        });
+        await interaction.editReply({ content: '❌ Ocorreu um erro inesperado. Tente novamente.' });
       }
     } catch (replyError) {
       console.error('❌ Não foi possível responder ao usuário:', replyError);
@@ -1055,12 +997,12 @@ client.on(Events.InteractionCreate, async interaction => {
   }
 });
 
-// ==================== EVENTO: MEMBRO SAI DO SERVIDOR ====================
+// EVENTO: MEMBRO SAI DO SERVIDOR
 client.on(Events.GuildMemberRemove, async (member) => {
   await GuildMemberRemoveHandler.handle(member);
 });
 
-// ==================== HANDLERS DE ERROS ====================
+// HANDLERS DE ERROS
 process.on('unhandledRejection', error => {
   console.error('❌ Unhandled promise rejection:', error);
 });
@@ -1104,7 +1046,7 @@ process.on('SIGTERM', async () => {
   process.exit();
 });
 
-// ==================== LOGIN DO BOT ====================
+// LOGIN DO BOT
 client.login(process.env.TOKEN).then(() => {
   console.log('🔐 Login realizado com sucesso');
 }).catch(error => {
