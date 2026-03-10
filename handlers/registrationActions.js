@@ -3,7 +3,10 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  PermissionFlagsBits
+  PermissionFlagsBits,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle
 } = require('discord.js');
 
 class RegistrationActions {
@@ -12,12 +15,59 @@ class RegistrationActions {
   }
 
   /**
+   * Verifica se um usuário ou nick está na blacklist
+   * @param {string} nick - Nickname do jogador
+   * @param {string} userId - ID do usuário Discord
+   * @returns {Object} - { isBlacklisted: boolean, reason: string }
+   */
+  static checkBlacklist(nick, userId) {
+    // Verificar blacklist por userId
+    if (global.blacklist.has(userId)) {
+      const dados = global.blacklist.get(userId);
+      return {
+        isBlacklisted: true,
+        reason: dados.motivo || 'Motivo não especificado'
+      };
+    }
+
+    // Verificar blacklist por nick (case insensitive)
+    for (const [id, dados] of global.blacklist.entries()) {
+      if (dados.nick && dados.nick.toLowerCase() === nick.toLowerCase()) {
+        return {
+          isBlacklisted: true,
+          reason: dados.motivo || 'Motivo não especificado'
+        };
+      }
+    }
+
+    return {
+      isBlacklisted: false,
+      reason: null
+    };
+  }
+
+  /**
+   * Retorna histórico de recusas de um usuário
+   * @param {string} userId - ID do usuário
+   * @param {string} nick - Nick do jogador
+   * @returns {Array} - Lista de recusas anteriores
+   */
+  static getHistoricoRecusas(userId, nick) {
+    if (!global.historicoRegistros || !global.historicoRegistros.has(userId)) {
+      return [];
+    }
+
+    const historico = global.historicoRegistros.get(userId);
+    return historico.filter(h => h.tipo === 'recusado') || [];
+  }
+
+  /**
    * Verifica permissões de recrutador (melhorado)
    */
   static async checkRecruiterPermission(interaction) {
     const isRecrutador = interaction.member.roles.cache.some(r => 
-      r.name === 'Recrutador' || 
-      r.name === 'Recrutadora' ||  // Variação de gênero
+      r.name === 'Recrutador' ||
+      r.name === 'Recrutadora' || // Variação de gênero
       r.name === 'ADM' ||
       r.name === 'Staff' ||
       r.name === 'Staffer'
@@ -45,7 +95,17 @@ class RegistrationActions {
         });
       }
 
-      const { member, nick, guilda, server, plataforma, arma } = registro;
+      // Suporta tanto a estrutura nova (dados) quanto a antiga
+      const dados = registro.dados || registro;
+      const { nick, guilda, server, plataforma, arma } = dados;
+      const member = registro.member || interaction.guild.members.cache.get(registro.userId);
+
+      if (!member) {
+        return interaction.reply({
+          content: '❌ Membro não encontrado no servidor!',
+          ephemeral: true
+        });
+      }
 
       // Aplicar nickname
       try {
@@ -67,7 +127,7 @@ class RegistrationActions {
           `**Jogador:** ${nick}\n` +
           `**Guilda:** ${guilda}\n` +
           `**Server:** ${server}\n` +
-          `**Plataforma:** ${plataforma}\n` +
+          `**Plataforma:** ${plataforma || 'N/A'}\n` +
           `**Arma Principal:** ${arma}\n` +
           `**Aprovado por:** ${interaction.user.tag}\n` +
           `**Status:** Membro`
@@ -127,7 +187,16 @@ class RegistrationActions {
         });
       }
 
-      const { member, nick, guilda, server, plataforma, arma } = registro;
+      const dados = registro.dados || registro;
+      const { nick, guilda, server, plataforma, arma } = dados;
+      const member = registro.member || interaction.guild.members.cache.get(registro.userId);
+
+      if (!member) {
+        return interaction.reply({
+          content: '❌ Membro não encontrado no servidor!',
+          ephemeral: true
+        });
+      }
 
       try {
         await member.setNickname(nick);
@@ -146,7 +215,7 @@ class RegistrationActions {
           `**Jogador:** ${nick}\n` +
           `**Guilda:** ${guilda}\n` +
           `**Server:** ${server}\n` +
-          `**Plataforma:** ${plataforma}\n` +
+          `**Plataforma:** ${plataforma || 'N/A'}\n` +
           `**Arma Principal:** ${arma}\n` +
           `**Aprovado por:** ${interaction.user.tag}\n` +
           `**Status:** Aliança`
@@ -203,7 +272,16 @@ class RegistrationActions {
         });
       }
 
-      const { member, nick, guilda, server, plataforma, arma } = registro;
+      const dados = registro.dados || registro;
+      const { nick, guilda, server, plataforma, arma } = dados;
+      const member = registro.member || interaction.guild.members.cache.get(registro.userId);
+
+      if (!member) {
+        return interaction.reply({
+          content: '❌ Membro não encontrado no servidor!',
+          ephemeral: true
+        });
+      }
 
       try {
         await member.setNickname(nick);
@@ -222,7 +300,7 @@ class RegistrationActions {
           `**Jogador:** ${nick}\n` +
           `**Guilda:** ${guilda}\n` +
           `**Server:** ${server}\n` +
-          `**Plataforma:** ${plataforma}\n` +
+          `**Plataforma:** ${plataforma || 'N/A'}\n` +
           `**Arma Principal:** ${arma}\n` +
           `**Aprovado por:** ${interaction.user.tag}\n` +
           `**Status:** Convidado`
@@ -306,21 +384,39 @@ class RegistrationActions {
         });
       }
 
-      const { member, nick } = registro;
+      const dados = registro.dados || registro;
+      const { nick } = dados;
+      const member = registro.member || interaction.guild.members.cache.get(registro.userId);
+
+      // Salvar no histórico de recusas
+      if (!global.historicoRegistros) global.historicoRegistros = new Map();
+      if (!global.historicoRegistros.has(registro.userId)) {
+        global.historicoRegistros.set(registro.userId, []);
+      }
+
+      global.historicoRegistros.get(registro.userId).push({
+        tipo: 'recusado',
+        motivo: motivo,
+        nick: nick,
+        data: Date.now(),
+        analisadoPor: interaction.user.tag
+      });
 
       // Enviar DM para o usuário
-      try {
-        await member.send({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle('❌ SEU REGISTRO FOI RECUSADO')
-              .setDescription(`Seu registro foi recusado.\n\n**Motivo:** ${motivo}\n\nVocê pode tentar novamente quando quiser.`)
-              .setColor(0xE74C3C)
-              .setTimestamp()
-          ]
-        });
-      } catch (e) {
-        console.log('[Registration] Não foi possível enviar DM de recusa');
+      if (member) {
+        try {
+          await member.send({
+            embeds: [
+              new EmbedBuilder()
+                .setTitle('❌ SEU REGISTRO FOI RECUSADO')
+                .setDescription(`Seu registro foi recusado.\n\n**Motivo:** ${motivo}\n\nVocê pode tentar novamente quando quiser.`)
+                .setColor(0xE74C3C)
+                .setTimestamp()
+            ]
+          });
+        } catch (e) {
+          console.log('[Registration] Não foi possível enviar DM de recusa');
+        }
       }
 
       // Log de recusa
@@ -397,10 +493,12 @@ class RegistrationActions {
         });
       }
 
-      const { member, nick, guilda } = registro;
+      const dados = registro.dados || registro;
+      const { nick, guilda } = dados;
+      const member = registro.member || interaction.guild.members.cache.get(registro.userId);
 
       // Adicionar à blacklist
-      global.blacklist.set(member.id, {
+      global.blacklist.set(registro.userId, {
         nick: nick,
         guilda: guilda,
         motivo: motivo,
@@ -409,10 +507,12 @@ class RegistrationActions {
       });
 
       // Banir do servidor
-      try {
-        await member.ban({ reason: `Blacklist: ${motivo}` });
-      } catch (e) {
-        console.log('[Registration] Não foi possível banir usuário');
+      if (member) {
+        try {
+          await member.ban({ reason: `Blacklist: ${motivo}` });
+        } catch (e) {
+          console.log('[Registration] Não foi possível banir usuário');
+        }
       }
 
       // Log
@@ -423,7 +523,7 @@ class RegistrationActions {
             new EmbedBuilder()
               .setTitle('🚫 USUÁRIO ADICIONADO À BLACKLIST')
               .setDescription(
-                `**Usuário:** ${nick} (${member.id})\n` +
+                `**Usuário:** ${nick} (${registro.userId})\n` +
                 `**Guilda:** ${guilda}\n` +
                 `**Motivo:** ${motivo}\n` +
                 `**Adicionado por:** ${interaction.user.tag}`
@@ -457,8 +557,8 @@ class RegistrationActions {
     // Verificar se já está registrado
     const membro = guild.members.cache.get(userId);
     if (membro && membro.roles.cache.some(r => 
-      r.name === 'Membro' || 
-      r.name === 'Aliança' || 
+      r.name === 'Membro' ||
+      r.name === 'Aliança' ||
       r.name === 'Convidado'
     )) {
       erros.push('Você já está registrado neste servidor!');
