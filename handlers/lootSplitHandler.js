@@ -10,7 +10,7 @@ const {
   PermissionFlagsBits
 } = require('discord.js');
 const Database = require('../utils/database');
-const XpHandler = require('./xpHandler'); // ✅ Importar XpHandler
+const XpHandler = require('./xpHandler');
 
 class LootSplitHandler {
   constructor() {
@@ -23,6 +23,19 @@ class LootSplitHandler {
     EVENTO_NORMAL: 1,      // 1 XP por minuto
     RAID_AVALON: 2         // 2 XP por minuto (dobro)
   };
+
+  // ✅ FUNÇÃO AUXILIAR: Formatar tempo em HH:MM:SS
+  static formatTime(milliseconds) {
+    if (!milliseconds || milliseconds <= 0) return '00:00:00';
+
+    const totalSeconds = Math.floor(milliseconds / 1000);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+
+    const pad = (num) => num.toString().padStart(2, '0');
+    return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+  }
 
   static createSimulationModal(eventId) {
     const modal = new ModalBuilder()
@@ -102,6 +115,7 @@ class LootSplitHandler {
       const config = global.guildConfig?.get(interaction.guild.id) || {};
       const taxaGuilda = config.taxaGuilda || 10;
 
+      // ✅ Calcular tempo total do evento
       let tempoTotalEvento = 0;
       if (eventData.inicioTimestamp && eventData.finalizadoEm) {
         tempoTotalEvento = eventData.finalizadoEm - eventData.inicioTimestamp;
@@ -163,6 +177,8 @@ class LootSplitHandler {
         taxaGuilda,
         valorDistribuir,
         distribuicao,
+        tempoTotalEvento: tempoTotalEvento, // ✅ Armazenar tempo total
+        eventoNome: eventData.nome,
         status: 'simulado',
         timestamp: Date.now()
       };
@@ -205,11 +221,17 @@ class LootSplitHandler {
     }
   }
 
+  // ✅ ATUALIZADO: Mostrar tempo em HH:MM:SS e % de participação
   static createSimulationEmbed(simulation, eventData) {
+    // Calcular tempo total do evento
+    const tempoTotalEvento = simulation.tempoTotalEvento || 0;
+    const tempoTotalFormatado = this.formatTime(tempoTotalEvento);
+
     const embed = new EmbedBuilder()
       .setTitle('💰 SIMULAÇÃO DE DIVISÃO DE LOOT')
       .setDescription(
-        `## ${eventData.nome}\n\n` +
+        `## ${eventData.nome || simulation.eventoNome}\n\n` +
+        `**⏱️ Duração Total do Evento:** \`${tempoTotalFormatado}\`\n\n` +
         `**💎 Valor Base:** \`${simulation.valorTotal.toLocaleString()}\`\n` +
         `**🎒 Sacos (adicional):** \`${simulation.valorSacos.toLocaleString()}\`\n` +
         `**🔧 Reparo:** \`${simulation.valorReparo.toLocaleString()}\`\n` +
@@ -219,15 +241,31 @@ class LootSplitHandler {
       .setColor(0xF1C40F)
       .setTimestamp();
 
+    // Lista de participantes com % de participação baseada no tempo total do evento
     const listaParticipantes = simulation.distribuicao.map(p => {
-      const tempoMin = Math.floor(p.tempo / 1000 / 60);
-      return `${p.nick}: \`${p.valor.toLocaleString()}\` (${p.percentagem}%) - ${tempoMin}min`;
-    }).join('\n');
+      const tempoFormatado = this.formatTime(p.tempo || 0);
+
+      // Calcular % de participação em relação ao tempo total do evento
+      let percentParticipacao = 0;
+      if (tempoTotalEvento > 0) {
+        percentParticipacao = ((p.tempo || 0) / tempoTotalEvento) * 100;
+      }
+
+      // Limitar a 100% (caso algum erro de timing)
+      percentParticipacao = Math.min(percentParticipacao, 100);
+
+      return `\`${p.nick}\`\n> 💰 **Valor:** \`${p.valor.toLocaleString()}\` | ⏱️ **Tempo:** \`${tempoFormatado}\` | 📊 **Participação:** \`${percentParticipacao.toFixed(1)}%\``;
+    }).join('\n\n');
 
     embed.addFields({
-      name: `👥 Participantes (${simulation.distribuicao.length})`,
+      name: `👥 Participantes (${simulation.distribuicao.length}) - Participação baseada no tempo total`,
       value: listaParticipantes || 'Nenhum participante',
       inline: false
+    });
+
+    // Adicionar legenda explicativa
+    embed.setFooter({
+      text: '💡 100% = Participou todo o evento | 50% = Participou metade do tempo | Formato: HH:MM:SS'
     });
 
     return embed;
@@ -500,7 +538,7 @@ class LootSplitHandler {
         });
       }
 
-      // ✅ Determinar se é Raid Avalon ou Evento Normal
+      // Determinar se é Raid Avalon ou Evento Normal
       const eventData = global.finishedEvents?.get(simulation.eventId) || global.activeEvents?.get(simulation.eventId);
 
       // Verificar se é raid avalon pelo ID ou pelos dados do evento
@@ -508,13 +546,13 @@ class LootSplitHandler {
                           simulation.eventId?.includes('raid') ||
                           eventData?.tipo === 'raid_avalon';
 
-      // ✅ Definir taxa de XP baseado no tipo de evento
+      // Definir taxa de XP baseado no tipo de evento
       const xpRate = isRaidAvalon ? this.XP_RATES.RAID_AVALON : this.XP_RATES.EVENTO_NORMAL;
       const eventoTipo = isRaidAvalon ? '🔥 RAID AVALON' : '⚔️ Evento Normal';
 
       console.log(`[LootSplit] Arquivando ${eventoTipo} - Taxa XP: ${xpRate} XP/min`);
 
-      // ✅ DISTRIBUIR XP AOS PARTICIPANTES
+      // DISTRIBUIR XP AOS PARTICIPANTES
       let totalXpDistribuido = 0;
       const canalLogXp = interaction.guild.channels.cache.find(c => c.name === '📜╠log-xp');
 
@@ -549,12 +587,12 @@ class LootSplitHandler {
                   .setDescription(
                     `✨ **Você ganhou XP por participar de um evento!**\n\n` +
                     `📅 **Evento:** ${eventoTipo}\n` +
-                    `⏱️ **Tempo Participado:** ${tempoMinutos} minutos\n` +
+                    `⏱️ **Tempo Participado:** ${this.formatTime(participante.tempo || 0)}\n` +
                     `💎 **XP Ganho:** \`${xpGanho.toLocaleString()} XP\`\n` +
                     `📈 **Taxa:** ${xpRate} XP/minuto\n\n` +
                     `🎊 Continue participando dos eventos da guilda para subir de nível!`
                   )
-                  .setColor(isRaidAvalon ? 0x9B59B6 : 0x2ECC71) // Roxo para raid, verde para normal
+                  .setColor(isRaidAvalon ? 0x9B59B6 : 0x2ECC71)
                   .setTimestamp();
 
                 await user.send({ embeds: [embedXp] });
@@ -608,7 +646,7 @@ class LootSplitHandler {
           components: []
         });
 
-        // Deletar canal após 10 segundos (aumentado para dar tempo de ver o embed)
+        // Deletar canal após 10 segundos
         setTimeout(async () => {
           try {
             await canalEvento.delete('Evento arquivado');
