@@ -24,17 +24,14 @@ class GuildMemberRemoveHandler {
           { name: '👤 Nick no Discord', value: member.nickname || member.user.username, inline: true },
           { name: '🆔 ID', value: member.id, inline: true },
           { 
-            name: '📅 Entrou em', 
-            value: member.joinedAt ? `<t:${Math.floor(member.joinedAt.getTime() / 1000)}:D>` : 'Desconhecido', 
+            name: '📅 Entrou em',
+            value: member.joinedAt ? `<t:${Math.floor(member.joinedAt.getTime() / 1000)}:D>` : 'Desconhecido',  // ✅ CORRIGIDO
             inline: true 
           },
           { name: '⏱️ Tempo no Servidor', value: this.calculateTime(member.joinedAt), inline: true }
         )
         .setFooter({ text: `Total de membros agora: ${guild.memberCount}` })
         .setTimestamp();
-
-      // Verificar se tem registro vinculado para mostrar o nick do jogo
-      // (Você pode buscar no banco de dados se tiver salvo)
 
       await canalSaida.send({ embeds: [embed] });
 
