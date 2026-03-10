@@ -16,12 +16,6 @@ class FinanceHandler {
     this.pendingTransfers = new Map();
   }
 
-  // ========== Helper para valores seguros ==========
-  /**
-   * Formata um número para string localizada, retornando '0' se undefined/null
-   * @param {number} value - Valor a formatar
-   * @returns {string} Valor formatado ou '0'
-   */
   static formatSafeNumber(value) {
     if (value === undefined || value === null || isNaN(value)) {
       return '0';
@@ -50,7 +44,6 @@ class FinanceHandler {
   static async processWithdrawRequest(interaction) {
     try {
       const valorInput = interaction.fields.getTextInputValue('valor_saque').trim();
-      // Remover pontos e vírgulas para conversão correta
       const valorLimpo = valorInput.replace(/\./g, '').replace(/,/g, '');
       const valor = parseInt(valorLimpo);
 
@@ -61,7 +54,6 @@ class FinanceHandler {
         });
       }
 
-      // CORREÇÃO: Usar await para chamadas async
       const user = await Database.getUser(interaction.user.id);
 
       if (!user || user.saldo === undefined) {
@@ -83,7 +75,7 @@ class FinanceHandler {
         id: withdrawalId,
         userId: interaction.user.id,
         userTag: interaction.user.tag,
-        valor: valor, // CORREÇÃO: Não multiplicar por 1.000.000
+        valor: valor,
         saldoAtual: user.saldo,
         status: 'pendente',
         timestamp: Date.now()
@@ -94,7 +86,6 @@ class FinanceHandler {
 
       console.log(`[Finance] Withdrawal request ${withdrawalId} created by ${interaction.user.id} for ${valor}`);
 
-      // CORREÇÃO: Enviar para canal correto 📊╠financeiro
       const canalFinanceiro = interaction.guild.channels.cache.find(c => c.name === '📊╠financeiro');
       if (!canalFinanceiro) {
         return interaction.reply({
@@ -126,7 +117,6 @@ class FinanceHandler {
             .setStyle(ButtonStyle.Danger)
         );
 
-      // Buscar cargos para mencionar
       const admRole = interaction.guild.roles.cache.find(r => r.name === 'ADM');
       const staffRole = interaction.guild.roles.cache.find(r => r.name === 'Staff');
       const tesoureiroRole = interaction.guild.roles.cache.find(r => r.name === 'tesoureiro');
@@ -179,26 +169,24 @@ class FinanceHandler {
         });
       }
 
-      // CORREÇÃO: Usar await
       await Database.removeSaldo(withdrawal.userId, withdrawal.valor, 'saque_aprovado');
 
       withdrawal.status = 'aprovado';
       withdrawal.aprovadoPor = interaction.user.id;
       withdrawal.aprovadoEm = Date.now();
 
-      // DM - Saque Aprovado
       try {
         const user = await interaction.client.users.fetch(withdrawal.userId);
-        const userData = await Database.getUser(withdrawal.userId); // CORREÇÃO: await
+        const userData = await Database.getUser(withdrawal.userId);
         const novoSaldo = userData?.saldo || 0;
 
         const embed = new EmbedBuilder()
           .setTitle('✅ SAQUE APROVADO')
           .setDescription(
             `💰 **Transação Concluída com Sucesso!**\n\n` +
-            `> **Valor Sacado:** \`${this.formatSafeNumber(withdrawal.valor)}\`\n` +
-            `> **Aprovado por:** \`${interaction.user.tag}\`\n` +
-            `> **Data:** ${new Date().toLocaleString('pt-BR')}\n\n` +
+            `\> **Valor Sacado:** \`${this.formatSafeNumber(withdrawal.valor)}\`\n` +
+            `\> **Aprovado por:** \`${interaction.user.tag}\`\n` +
+            `\> **Data:** ${new Date().toLocaleString('pt-BR')}\n\n` +
             `💳 **Novo Saldo:** \`${this.formatSafeNumber(novoSaldo)}\``
           )
           .setColor(0x2ECC71)
@@ -217,7 +205,6 @@ class FinanceHandler {
         components: []
       });
 
-      // Log
       const canalLogs = interaction.guild.channels.cache.find(c => c.name === '📜╠logs-banco');
       if (canalLogs) {
         await canalLogs.send({
@@ -295,7 +282,6 @@ class FinanceHandler {
       withdrawal.motivoRecusa = motivo;
       withdrawal.recusadoPor = interaction.user.id;
 
-      // DM - Saque Recusado
       try {
         const user = await interaction.client.users.fetch(withdrawal.userId);
 
@@ -303,9 +289,9 @@ class FinanceHandler {
           .setTitle('❌ SAQUE RECUSADO')
           .setDescription(
             `⚠️ **Sua solicitação de saque foi recusada.**\n\n` +
-            `> **Valor Solicitado:** \`${this.formatSafeNumber(withdrawal.valor)}\`\n` +
-            `> **Motivo:** \`\`\`${motivo}\`\`\`\n` +
-            `> **Recusado por:** \`${interaction.user.tag}\`\n\n` +
+            `\> **Valor Solicitado:** \`${this.formatSafeNumber(withdrawal.valor)}\`\n` +
+            `\> **Motivo:** \`\`\`${motivo}\`\`\`\n` +
+            `\> **Recusado por:** \`${interaction.user.tag}\`\n\n` +
             `💡 *Se você tiver dúvidas, entre em contato com um administrador.*`
           )
           .setColor(0xE74C3C)
@@ -324,7 +310,6 @@ class FinanceHandler {
         ephemeral: true
       });
 
-      // Atualizar mensagem original
       try {
         await interaction.message.edit({
           content: `❌ SAQUE RECUSADO por ${interaction.user.tag}\n**Motivo:** ${motivo}`,
@@ -379,7 +364,7 @@ class FinanceHandler {
         id: loanId,
         userId: interaction.user.id,
         userTag: interaction.user.tag,
-        valor: valor, // CORREÇÃO: Não multiplicar
+        valor: valor,
         status: 'pendente',
         timestamp: Date.now()
       };
@@ -470,9 +455,7 @@ class FinanceHandler {
         });
       }
 
-      // CORREÇÃO: Usar await
       await Database.addSaldo(loan.userId, loan.valor, 'emprestimo_aprovado');
-      // Registrar dívida
       const user = await Database.getUser(loan.userId);
       const novaDivida = (user.emprestimosPendentes || 0) + loan.valor;
       await Database.updateUser(loan.userId, { emprestimos_pendentes: novaDivida });
@@ -481,10 +464,9 @@ class FinanceHandler {
       loan.aprovadoPor = interaction.user.id;
       loan.aprovadoEm = Date.now();
 
-      // DM - Empréstimo Aprovado
       try {
         const user = await interaction.client.users.fetch(loan.userId);
-        const userData = await Database.getUser(loan.userId); // CORREÇÃO: await
+        const userData = await Database.getUser(loan.userId);
         const novoSaldo = userData?.saldo || 0;
         const dividaTotal = userData?.emprestimosPendentes || loan.valor;
 
@@ -492,9 +474,9 @@ class FinanceHandler {
           .setTitle('✅ EMPRÉSTIMO APROVADO')
           .setDescription(
             `💳 **Crédito Liberado!**\n\n` +
-            `> **Valor do Empréstimo:** \`${this.formatSafeNumber(loan.valor)}\`\n` +
-            `> **Aprovado por:** \`${interaction.user.tag}\`\n` +
-            `> **Data:** ${new Date().toLocaleString('pt-BR')}\n\n` +
+            `\> **Valor do Empréstimo:** \`${this.formatSafeNumber(loan.valor)}\`\n` +
+            `\> **Aprovado por:** \`${interaction.user.tag}\`\n` +
+            `\> **Data:** ${new Date().toLocaleString('pt-BR')}\n\n` +
             `💰 **Novo Saldo:** \`${this.formatSafeNumber(novoSaldo)}\`\n` +
             `📊 **Dívida Total:** \`${this.formatSafeNumber(dividaTotal)}\`\n\n` +
             `⚠️ *Lembre-se de quitar seu empréstimo assim que possível!*`
@@ -515,7 +497,6 @@ class FinanceHandler {
         components: []
       });
 
-      // Log
       const canalLogs = interaction.guild.channels.cache.find(c => c.name === '📜╠logs-banco');
       if (canalLogs) {
         await canalLogs.send({
@@ -568,7 +549,6 @@ class FinanceHandler {
       loan.status = 'recusado';
       loan.recusadoPor = interaction.user.id;
 
-      // DM - Empréstimo Recusado
       try {
         const user = await interaction.client.users.fetch(loan.userId);
 
@@ -576,8 +556,8 @@ class FinanceHandler {
           .setTitle('❌ EMPRÉSTIMO RECUSADO')
           .setDescription(
             `⚠️ **Sua solicitação de empréstimo foi recusada.**\n\n` +
-            `> **Valor Solicitado:** \`${this.formatSafeNumber(loan.valor)}\`\n` +
-            `> **Recusado por:** \`${interaction.user.tag}\`\n\n` +
+            `\> **Valor Solicitado:** \`${this.formatSafeNumber(loan.valor)}\`\n` +
+            `\> **Recusado por:** \`${interaction.user.tag}\`\n\n` +
             `💡 *Entre em contato com a administração para mais informações.*`
           )
           .setColor(0xE74C3C)
@@ -605,7 +585,7 @@ class FinanceHandler {
     }
   }
 
-  // ========== Transferência ==========
+  // ========== Transferência (ATUALIZADO COM COMENTÁRIO) ==========
   static createTransferModal() {
     const modal = new ModalBuilder()
       .setCustomId('modal_transferir_saldo')
@@ -627,9 +607,19 @@ class FinanceHandler {
       .setRequired(true)
       .setMaxLength(12);
 
+    // ✅ NOVO: Campo de comentário/motivo
+    const comentarioInput = new TextInputBuilder()
+      .setCustomId('comentario_transferencia')
+      .setLabel('Motivo/Comentário (opcional)')
+      .setPlaceholder('Ex: Pagamento por craft, Reembolso de reparo, etc...')
+      .setStyle(TextInputStyle.Paragraph)
+      .setRequired(false)
+      .setMaxLength(500);
+
     modal.addComponents(
       new ActionRowBuilder().addComponents(usuarioInput),
-      new ActionRowBuilder().addComponents(valorInput)
+      new ActionRowBuilder().addComponents(valorInput),
+      new ActionRowBuilder().addComponents(comentarioInput) // ✅ Adicionado
     );
     return modal;
   }
@@ -638,6 +628,9 @@ class FinanceHandler {
     try {
       const userIdDestino = interaction.fields.getTextInputValue('id_usuario').trim();
       const valorInput = interaction.fields.getTextInputValue('valor_transferencia').trim();
+      // ✅ NOVO: Pegar o comentário do modal
+      const comentario = interaction.fields.getTextInputValue('comentario_transferencia')?.trim() || 'Sem motivo especificado';
+
       const valorLimpo = valorInput.replace(/\./g, '').replace(/,/g, '');
       const valor = parseInt(valorLimpo);
 
@@ -662,7 +655,6 @@ class FinanceHandler {
         });
       }
 
-      // CORREÇÃO: Usar await
       const userOrigem = await Database.getUser(interaction.user.id);
       if (!userOrigem || userOrigem.saldo === undefined) {
         return interaction.reply({
@@ -678,7 +670,6 @@ class FinanceHandler {
         });
       }
 
-      // Verificar se destino existe
       let destinoTag = 'Usuário não encontrado';
       try {
         const destinoUser = await interaction.client.users.fetch(userIdDestino);
@@ -697,7 +688,8 @@ class FinanceHandler {
         fromTag: interaction.user.tag,
         toId: userIdDestino,
         toTag: destinoTag,
-        valor: valor, // CORREÇÃO: Não multiplicar
+        valor: valor,
+        comentario: comentario, // ✅ NOVO: Salvar o comentário
         status: 'pendente',
         timestamp: Date.now()
       };
@@ -705,9 +697,9 @@ class FinanceHandler {
       if (!global.pendingTransfers) global.pendingTransfers = new Map();
       global.pendingTransfers.set(transferId, transferData);
 
-      console.log(`[Finance] Transfer request ${transferId} from ${interaction.user.id} to ${userIdDestino}`);
+      console.log(`[Finance] Transfer request ${transferId} from ${interaction.user.id} to ${userIdDestino} - Motivo: ${comentario}`);
 
-      // DM - Solicitação de Transferência (para destino)
+      // DM - Solicitação de Transferência (para destino) COM COMENTÁRIO
       try {
         const destinoUser = await interaction.client.users.fetch(userIdDestino);
 
@@ -715,8 +707,9 @@ class FinanceHandler {
           .setTitle('🔄 SOLICITAÇÃO DE TRANSFERÊNCIA')
           .setDescription(
             `💸 **Você recebeu uma proposta de transferência!**\n\n` +
-            `> **De:** \`${interaction.user.tag}\`\n` +
-            `> **Valor:** \`${this.formatSafeNumber(valor)}\`\n\n` +
+            `\> **De:** \`${interaction.user.tag}\`\n` +
+            `\> **Valor:** \`${this.formatSafeNumber(valor)}\`\n` +
+            `\> **Motivo:** \`\`\`${comentario}\`\`\`\n\n` + // ✅ Mostrar o comentário
             `🤔 *Aceitar ou recusar esta transferência?*`
           )
           .setColor(0xF1C40F)
@@ -743,7 +736,7 @@ class FinanceHandler {
         });
 
         await interaction.reply({
-          content: `✅ Solicitação de transferência enviada para ${destinoTag}! Aguarde confirmação.`,
+          content: `✅ Solicitação de transferência enviada para ${destinoTag}!\n📝 **Motivo:** \`${comentario}\`\nAguarde confirmação.`,
           ephemeral: true
         });
 
@@ -783,7 +776,6 @@ class FinanceHandler {
         });
       }
 
-      // Verificar saldo novamente antes de confirmar
       const userOrigem = await Database.getUser(transfer.fromId);
       if (!userOrigem || userOrigem.saldo < transfer.valor) {
         return interaction.reply({
@@ -792,14 +784,13 @@ class FinanceHandler {
         });
       }
 
-      // Realizar transferência
       await Database.removeSaldo(transfer.fromId, transfer.valor, 'transferencia_enviada');
       await Database.addSaldo(transfer.toId, transfer.valor, 'transferencia_recebida');
 
       transfer.status = 'concluida';
       transfer.dataAceite = Date.now();
 
-      // DM - Transferência Aceita (para origem)
+      // DM - Transferência Aceita (para origem) COM COMENTÁRIO
       try {
         const origemUser = await interaction.client.users.fetch(transfer.fromId);
 
@@ -807,9 +798,10 @@ class FinanceHandler {
           .setTitle('✅ TRANSFERÊNCIA CONCLUÍDA')
           .setDescription(
             `🎉 **Sua transferência foi aceita!**\n\n` +
-            `> **Para:** \`${interaction.user.tag}\`\n` +
-            `> **Valor:** \`${this.formatSafeNumber(transfer.valor)}\`\n` +
-            `> **Data:** ${new Date().toLocaleString('pt-BR')}\n\n` +
+            `\> **Para:** \`${interaction.user.tag}\`\n` +
+            `\> **Valor:** \`${this.formatSafeNumber(transfer.valor)}\`\n` +
+            `\> **Motivo:** \`\`\`${transfer.comentario}\`\`\`\n` + // ✅ Incluir comentário
+            `\> **Data:** ${new Date().toLocaleString('pt-BR')}\n\n` +
             `💰 O valor já foi debitado da sua conta.`
           )
           .setColor(0x2ECC71)
@@ -823,14 +815,15 @@ class FinanceHandler {
         console.log(`[Finance] Could not notify origin user ${transfer.fromId}`);
       }
 
-      // DM para quem aceitou
+      // DM para quem aceitou COM COMENTÁRIO
       const embedAceite = new EmbedBuilder()
         .setTitle('✅ TRANSFERÊNCIA RECEBIDA')
         .setDescription(
           `💰 **Você aceitou a transferência!**\n\n` +
-          `> **De:** \`${transfer.fromTag}\`\n` +
-          `> **Valor Recebido:** \`${this.formatSafeNumber(transfer.valor)}\`\n` +
-          `> **Data:** ${new Date().toLocaleString('pt-BR')}`
+          `\> **De:** \`${transfer.fromTag}\`\n` +
+          `\> **Valor Recebido:** \`${this.formatSafeNumber(transfer.valor)}\`\n` +
+          `\> **Motivo:** \`\`\`${transfer.comentario}\`\`\`\n` + // ✅ Incluir comentário
+          `\> **Data:** ${new Date().toLocaleString('pt-BR')}`
         )
         .setColor(0x2ECC71)
         .setFooter({
@@ -844,7 +837,6 @@ class FinanceHandler {
         components: []
       });
 
-      // Log
       const canalLogs = interaction.guild.channels.cache.find(c => c.name === '📜╠logs-banco');
       if (canalLogs) {
         await canalLogs.send({
@@ -854,7 +846,8 @@ class FinanceHandler {
               .setDescription(
                 `**De:** <@${transfer.fromId}>\n` +
                 `**Para:** <@${transfer.toId}>\n` +
-                `**Valor:** \`${this.formatSafeNumber(transfer.valor)}\``
+                `**Valor:** \`${this.formatSafeNumber(transfer.valor)}\`\n` +
+                `**Motivo:** \`${transfer.comentario}\`` // ✅ Incluir no log
               )
               .setColor(0x95A5A6)
               .setTimestamp()
@@ -900,8 +893,9 @@ class FinanceHandler {
           .setTitle('❌ TRANSFERÊNCIA RECUSADA')
           .setDescription(
             `⚠️ **Sua transferência foi recusada.**\n\n` +
-            `> **Para:** \`${interaction.user.tag}\`\n` +
-            `> **Valor:** \`${this.formatSafeNumber(transfer.valor)}\`\n\n` +
+            `\> **Para:** \`${interaction.user.tag}\`\n` +
+            `\> **Valor:** \`${this.formatSafeNumber(transfer.valor)}\`\n` +
+            `\> **Motivo Original:** \`${transfer.comentario}\`\n\n` + // ✅ Mostrar o comentário mesmo quando recusado
             `💡 O valor não foi debitado da sua conta.`
           )
           .setColor(0xE74C3C)
@@ -920,8 +914,9 @@ class FinanceHandler {
         .setTitle('❌ TRANSFERÊNCIA RECUSADA')
         .setDescription(
           `🚫 **Você recusou a transferência.**\n\n` +
-          `> **De:** \`${transfer.fromTag}\`\n` +
-          `> **Valor:** \`${this.formatSafeNumber(transfer.valor)}\``
+          `\> **De:** \`${transfer.fromTag}\`\n` +
+          `\> **Valor:** \`${this.formatSafeNumber(transfer.valor)}\`\n` +
+          `\> **Motivo:** \`${transfer.comentario}\``
         )
         .setColor(0xE74C3C)
         .setFooter({
@@ -947,16 +942,13 @@ class FinanceHandler {
   // ========== Consultar Saldo ==========
   static async sendBalanceInfo(user) {
     try {
-      // CORREÇÃO: Usar await
       const userData = await Database.getUser(user.id);
 
-      // Validação de segurança para dados do usuário
       if (!userData) {
         console.error(`[Finance] User data not found for ${user.id}`);
         throw new Error('Dados do usuário não encontrados');
       }
 
-      // Garantir que todos os valores numéricos existam
       const saldo = userData.saldo || 0;
       const emprestimosPendentes = userData.emprestimosPendentes || 0;
       const saldoLiquido = saldo - emprestimosPendentes;
@@ -964,7 +956,6 @@ class FinanceHandler {
       const totalSacado = userData.totalSacado || 0;
       const totalEmprestimos = userData.totalEmprestimos || 0;
 
-      // Embed SEM IMAGENS
       const embed = new EmbedBuilder()
         .setTitle('💰 SEU SALDO')
         .setDescription(
@@ -973,9 +964,9 @@ class FinanceHandler {
           `📉 **Empréstimos Pendentes:** \`\`\`${this.formatSafeNumber(emprestimosPendentes)}\`\`\`\n` +
           `✨ **Saldo Líquido:** \`\`\`${this.formatSafeNumber(saldoLiquido)}\`\`\`\n\n` +
           `📈 **Estatísticas:**\n` +
-          `> Total Recebido: \`${this.formatSafeNumber(totalRecebido)}\`\n` +
-          `> Total Sacado: \`${this.formatSafeNumber(totalSacado)}\`\n` +
-          `> Total em Empréstimos: \`${this.formatSafeNumber(totalEmprestimos)}\``
+          `\> Total Recebido: \`${this.formatSafeNumber(totalRecebido)}\`\n` +
+          `\> Total Sacado: \`${this.formatSafeNumber(totalSacado)}\`\n` +
+          `\> Total em Empréstimos: \`${this.formatSafeNumber(totalEmprestimos)}\``
         )
         .setColor(0x2ECC71)
         .setFooter({
@@ -983,7 +974,6 @@ class FinanceHandler {
         })
         .setTimestamp();
 
-      // Adicionar barra de progresso visual (opcional)
       const percentualSaque = totalRecebido > 0
         ? Math.round((totalSacado / totalRecebido) * 100)
         : 0;

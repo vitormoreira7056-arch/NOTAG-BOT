@@ -7,39 +7,34 @@ const { promisify } = require('util');
  * Database Manager - Versão SQLite3 para Replit
  * API idêntica à versão better-sqlite3 para compatibilidade
  */
-
 class DatabaseManager {
   constructor() {
     this.dbPath = path.join(__dirname, '..', 'data', 'database.db');
     this.db = null;
     this.initialized = false;
-    this.statements = {}; // Cache de prepared statements
+    this.statements = {};
   }
 
   async initialize() {
     try {
-      // Garante diretório
       const dir = path.dirname(this.dbPath);
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
       }
 
-      // Abre conexão (async)
       this.db = new sqlite3.Database(this.dbPath);
 
-      // Promisify methods
       this.db.runAsync = promisify(this.db.run.bind(this.db));
       this.db.getAsync = promisify(this.db.get.bind(this.db));
       this.db.allAsync = promisify(this.db.all.bind(this.db));
 
       await this.createTables();
-      await this.migrateSchema(); // NOVO: Migração de schema
+      await this.migrateSchema();
       await this.migrateFromJSON();
 
       this.initialized = true;
       console.log('[Database] SQLite3 initialized successfully (Replit Mode)');
 
-      // Cleanup automático a cada 24h
       setInterval(() => this.cleanup(), 24 * 60 * 60 * 1000);
 
     } catch (error) {
@@ -49,7 +44,6 @@ class DatabaseManager {
   }
 
   async createTables() {
-    // Usuários (sistema financeiro + XP)
     await this.db.runAsync(`
       CREATE TABLE IF NOT EXISTS users (
         user_id TEXT PRIMARY KEY,
@@ -71,7 +65,6 @@ class DatabaseManager {
       )
     `);
 
-    // Transações (auditoria completa)
     await this.db.runAsync(`
       CREATE TABLE IF NOT EXISTS transactions (
         id TEXT PRIMARY KEY,
@@ -87,7 +80,6 @@ class DatabaseManager {
       )
     `);
 
-    // Eventos (histórico)
     await this.db.runAsync(`
       CREATE TABLE IF NOT EXISTS events (
         event_id TEXT PRIMARY KEY,
@@ -106,7 +98,6 @@ class DatabaseManager {
       )
     `);
 
-    // Blacklist
     await this.db.runAsync(`
       CREATE TABLE IF NOT EXISTS blacklist (
         user_id TEXT PRIMARY KEY,
@@ -118,7 +109,6 @@ class DatabaseManager {
       )
     `);
 
-    // Auditoria
     await this.db.runAsync(`
       CREATE TABLE IF NOT EXISTS audit_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -131,7 +121,6 @@ class DatabaseManager {
       )
     `);
 
-    // Templates de eventos
     await this.db.runAsync(`
       CREATE TABLE IF NOT EXISTS event_templates (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -146,7 +135,6 @@ class DatabaseManager {
       )
     `);
 
-    // Votações
     await this.db.runAsync(`
       CREATE TABLE IF NOT EXISTS votes (
         vote_id TEXT PRIMARY KEY,
@@ -162,7 +150,6 @@ class DatabaseManager {
       )
     `);
 
-    // Presença diária
     await this.db.runAsync(`
       CREATE TABLE IF NOT EXISTS daily_checkins (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -176,7 +163,6 @@ class DatabaseManager {
       )
     `);
 
-    // 🎯 TABELA NOVA: Configurações da Guilda
     await this.db.runAsync(`
       CREATE TABLE IF NOT EXISTS guild_config (
         guild_id TEXT PRIMARY KEY,
@@ -192,7 +178,6 @@ class DatabaseManager {
       )
     `);
 
-    // 🎯 TABELA NOVA: Histórico de eventos arquivados
     await this.db.runAsync(`
       CREATE TABLE IF NOT EXISTS event_history (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -205,7 +190,6 @@ class DatabaseManager {
       )
     `);
 
-    // Índices
     await this.db.runAsync(`CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(user_id)`);
     await this.db.runAsync(`CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(created_at)`);
     await this.db.runAsync(`CREATE INDEX IF NOT EXISTS idx_events_guild ON events(guild_id)`);
@@ -213,20 +197,12 @@ class DatabaseManager {
     await this.db.runAsync(`CREATE INDEX IF NOT EXISTS idx_guild_config ON guild_config(guild_id)`);
   }
 
-  /**
-   * NOVO: Migração de schema para adicionar colunas que possam estar faltando
-   */
   async migrateSchema() {
     try {
       console.log('[Database] Checking schema migrations...');
-
-      // Verificar e adicionar colunas na tabela guild_config se necessário
       const tableInfo = await this.db.allAsync(`PRAGMA table_info(guild_config)`);
       const existingColumns = tableInfo.map(col => col.name);
 
-      console.log(`[Database] Existing columns in guild_config: ${existingColumns.join(', ')}`);
-
-      // Mapeamento de colunas que devem existir
       const requiredColumns = {
         'guilda_nome': 'TEXT',
         'guilda_server': 'TEXT',
@@ -247,21 +223,19 @@ class DatabaseManager {
           }
         }
       }
-
       console.log('[Database] Schema migration completed');
     } catch (error) {
       console.error('[Database] Error during schema migration:', error);
     }
   }
 
-  // ==================== GUILD CONFIG (NOVO) ====================
+  // ==================== GUILD CONFIG ====================
 
   async getGuildConfig(guildId) {
     try {
       const row = await this.db.getAsync('SELECT * FROM guild_config WHERE guild_id = ?', [guildId]);
 
       if (!row) {
-        // Cria config padrão
         await this.db.runAsync(`
           INSERT INTO guild_config (guild_id, updated_at) VALUES (?, ?)
         `, [guildId, Date.now()]);
@@ -298,17 +272,14 @@ class DatabaseManager {
       const fields = [];
       const values = [];
 
-      // Mapeamento de campos
       const fieldMap = {
         idioma: 'idioma',
         taxaGuilda: 'taxa_guilda',
-        guildaRegistrada: null, // tratado separadamente
         xpAtivo: 'xp_ativo',
         taxasBau: 'taxas_bau',
         taxaEmprestimo: 'taxa_emprestimo'
       };
 
-      // Tratar guildaRegistrada separadamente
       if (data.guildaRegistrada !== undefined) {
         if (data.guildaRegistrada === null) {
           fields.push('guilda_nome = NULL');
@@ -324,7 +295,6 @@ class DatabaseManager {
         }
       }
 
-      // Outros campos
       for (const [key, value] of Object.entries(data)) {
         if (key === 'guildaRegistrada') continue;
         const dbField = fieldMap[key];
@@ -411,7 +381,7 @@ class DatabaseManager {
     const id = transaction.id || `txn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
     await this.db.runAsync(`
-      INSERT INTO transactions 
+      INSERT INTO transactions
       (id, type, user_id, amount, reason, guild_id, event_id, approved_by, approved_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
@@ -445,7 +415,7 @@ class DatabaseManager {
     return result?.total || 0;
   }
 
-  // ==================== SALDO (COMPATIBILIDADE) ====================
+  // ==================== SALDO ====================
 
   async getSaldo(userId) {
     const user = await this.getUser(userId);
@@ -496,7 +466,7 @@ class DatabaseManager {
     return await this.getUserTransactions(userId, limit);
   }
 
-  // ==================== GUILD FINANCE (NOVO) ====================
+  // ==================== GUILD FINANCE ====================
 
   async getGuildDetailedStats(guildId) {
     try {
@@ -536,7 +506,7 @@ class DatabaseManager {
     }
   }
 
-  // ==================== EVENT STATS (NOVO) ====================
+  // ==================== EVENT STATS ====================
 
   async getEventParticipationStats(guildId, periodDays = 30, roleFilter = null) {
     try {
@@ -597,6 +567,47 @@ class DatabaseManager {
       return events;
     } catch (error) {
       console.error('[Database] Error getting events by period:', error);
+      return [];
+    }
+  }
+
+  // ==================== EVENT HISTORY (FUNÇÕES ADICIONADAS) ====================
+
+  async addEventHistory(historyData) {
+    try {
+      await this.db.runAsync(`
+        INSERT INTO event_history (event_id, simulation_id, guild_id, arquivado_por, timestamp, dados)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `, [
+        historyData.eventId,
+        historyData.simulationId,
+        historyData.guildId,
+        historyData.arquivadoPor,
+        historyData.timestamp,
+        JSON.stringify(historyData.dados || {})
+      ]);
+      console.log(`[Database] Event history added for ${historyData.eventId}`);
+    } catch (error) {
+      console.error('[Database] Error adding event history:', error);
+      throw error;
+    }
+  }
+
+  async getEventHistory(guildId, limit = 50) {
+    try {
+      const rows = await this.db.allAsync(`
+        SELECT * FROM event_history
+        WHERE guild_id = ?
+        ORDER BY timestamp DESC
+        LIMIT ?
+      `, [guildId, limit]);
+
+      return rows.map(row => ({
+        ...row,
+        dados: JSON.parse(row.dados || '{}')
+      }));
+    } catch (error) {
+      console.error('[Database] Error getting event history:', error);
       return [];
     }
   }
@@ -666,7 +677,7 @@ class DatabaseManager {
     ]);
   }
 
-  async getEventHistory(guildId, limit = 50) {
+  async getEventHistoryTable(guildId, limit = 50) {
     return await this.db.allAsync(`
       SELECT * FROM events
       WHERE guild_id = ?
@@ -684,8 +695,8 @@ class DatabaseManager {
       INSERT INTO daily_checkins (user_id, guild_id, date, reward_xp, reward_saldo, streak)
       VALUES (?, ?, ?, ?, ?, ?)
       ON CONFLICT(user_id, date) DO UPDATE SET
-        reward_xp = excluded.reward_xp,
-        reward_saldo = excluded.reward_saldo
+      reward_xp = excluded.reward_xp,
+      reward_saldo = excluded.reward_saldo
     `, [userId, guildId, today, rewards.xp, rewards.saldo, rewards.streak]);
 
     await this.updateUser(userId, {
@@ -790,7 +801,6 @@ class DatabaseManager {
     const path = require('path');
     const dataDir = path.join(__dirname, '..', 'data');
 
-    // Migra blacklist
     const blacklistPath = path.join(dataDir, 'blacklist.json');
     if (fs.existsSync(blacklistPath)) {
       try {
@@ -817,5 +827,4 @@ class DatabaseManager {
   }
 }
 
-// Singleton
 module.exports = new DatabaseManager();

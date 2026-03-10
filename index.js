@@ -37,7 +37,7 @@ const atualizarCommand = require('./commands/atualizar');
 const limparEventosCommand = require('./commands/limpar-eventos');
 const limparSaldoCommand = require('./commands/limpar-saldo');
 const limparXpCommand = require('./commands/limpar-xp');
-const ajudaCommand = require('./commands/ajuda'); // ✅ NOVO: Comando de ajuda
+const ajudaCommand = require('./commands/ajuda');
 
 // Criar cliente
 const client = new Client({
@@ -63,7 +63,7 @@ client.commands.set(atualizarCommand.data.name, atualizarCommand);
 client.commands.set(limparEventosCommand.data.name, limparEventosCommand);
 client.commands.set(limparSaldoCommand.data.name, limparSaldoCommand);
 client.commands.set(limparXpCommand.data.name, limparXpCommand);
-client.commands.set(ajudaCommand.data.name, ajudaCommand); // ✅ NOVO: Registrar comando de ajuda
+client.commands.set(ajudaCommand.data.name, ajudaCommand);
 
 // ==================== INICIALIZAR VARIÁVEIS GLOBAIS ====================
 global.registrosPendentes = new Map();
@@ -127,7 +127,7 @@ client.once(Events.ClientReady, async () => {
     limparEventosCommand.data.toJSON(),
     limparSaldoCommand.data.toJSON(),
     limparXpCommand.data.toJSON(),
-    ajudaCommand.data.toJSON() // ✅ NOVO: Registrar comando de ajuda no Discord
+    ajudaCommand.data.toJSON()
   ];
 
   const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
@@ -605,6 +605,22 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
+      // ✅ NOVO: Handlers do sistema de Orb XP atualizado
+      if (customId === 'orb_select_users') {
+        await OrbHandler.openUserSelection(interaction);
+        return;
+      }
+
+      if (customId === 'orb_clear_users') {
+        await OrbHandler.clearUserSelection(interaction);
+        return;
+      }
+
+      if (customId === 'orb_proceed_to_modal') {
+        await OrbHandler.openOrbModal(interaction);
+        return;
+      }
+
       if (customId.startsWith('orb_approve_')) {
         const depositId = customId.replace('orb_approve_', '');
         await OrbHandler.approveOrb(interaction, depositId);
@@ -811,10 +827,13 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // ✅ NOVO: Handler para menu de ajuda
+      // ✅ NOVO: Handler para seleção de usuários do orb
+      if (interaction.customId === 'select_orb_users') {
+        await OrbHandler.processUserSelection(interaction);
+        return;
+      }
+
       if (interaction.customId === 'ajuda_menu') {
-        // Este handler é gerenciado dentro do próprio comando ajuda.js
-        // Não precisa de tratamento aqui pois o comando cria seu próprio collector
         return;
       }
     }
@@ -824,16 +843,6 @@ client.on(Events.InteractionCreate, async interaction => {
       if (interaction.customId === 'select_xp_target_user') {
         const targetUserId = interaction.values[0];
         await PerfilHandler.createManualXpModal(interaction, targetUserId);
-        return;
-      }
-
-      if (interaction.customId === 'select_orb_users') {
-        const selectedUsers = interaction.values;
-        if (!global.orbTemp) global.orbTemp = new Map();
-        const tempData = global.orbTemp.get(interaction.user.id) || {};
-        tempData.users = selectedUsers;
-        global.orbTemp.set(interaction.user.id, tempData);
-        await OrbHandler.showOrbTypeSelect(interaction);
         return;
       }
     }
@@ -945,11 +954,9 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
+      // ✅ NOVO: Handler para modal de depósito de orb (atualizado)
       if (interaction.customId.startsWith('modal_depositar_orb_')) {
-        const parts = interaction.customId.replace('modal_depositar_orb_', '').split('_');
-        const orbType = parts[0];
-        const userIds = parts[1].split(',');
-        await OrbHandler.processOrbDeposit(interaction, orbType, userIds);
+        await OrbHandler.processOrbDeposit(interaction);
         return;
       }
 
