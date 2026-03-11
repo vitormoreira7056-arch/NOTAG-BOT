@@ -7,7 +7,11 @@ const {
   Events,
   PermissionFlagsBits,
   EmbedBuilder,
-  ChannelType
+  ChannelType,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
+  ActionRowBuilder
 } = require('discord.js');
 const fs = require('fs');
 require('dotenv').config();
@@ -29,6 +33,7 @@ const OrbHandler = require('./handlers/orbHandler');
 const XpHandler = require('./handlers/xpHandler');
 const XpEventHandler = require('./handlers/xpEventHandler');
 const RaidAvalonHandler = require('./handlers/raidAvalonHandler');
+const KillboardHandler = require('./handlers/killboardHandler');
 
 // ==================== IMPORTAR COMANDOS ====================
 const instalarCommand = require('./commands/instalar');
@@ -38,6 +43,7 @@ const limparEventosCommand = require('./commands/limpar-eventos');
 const limparSaldoCommand = require('./commands/limpar-saldo');
 const limparXpCommand = require('./commands/limpar-xp');
 const ajudaCommand = require('./commands/ajuda');
+const killboardCommand = require('./commands/killboard');
 
 // Criar cliente
 const client = new Client({
@@ -64,6 +70,7 @@ client.commands.set(limparEventosCommand.data.name, limparEventosCommand);
 client.commands.set(limparSaldoCommand.data.name, limparSaldoCommand);
 client.commands.set(limparXpCommand.data.name, limparXpCommand);
 client.commands.set(ajudaCommand.data.name, ajudaCommand);
+client.commands.set(killboardCommand.data.name, killboardCommand);
 
 // ==================== INICIALIZAR VARIÁVEIS GLOBAIS ====================
 global.registrosPendentes = new Map();
@@ -85,7 +92,8 @@ global.orbTemp = new Map();
 global.guildaRegistroTemp = new Map();
 global.pendingBauSales = new Map();
 global.client = client;
-global.xpDepositTemp = new Map(); // ✅ NOVO: Para sistema de depósito de XP múltiplo
+global.xpDepositTemp = new Map();
+global.killboardProcessedEvents = new Map();
 
 // Carregar dados persistidos (blacklist e histórico)
 try {
@@ -104,6 +112,15 @@ try {
     global.historicoRegistros = new Map(historicoData);
     console.log(`📜 Histórico carregado: ${global.historicoRegistros.size} usuários com histórico`);
   }
+
+  if (fs.existsSync('./data/killboard_config.json')) {
+    const killboardData = JSON.parse(fs.readFileSync('./data/killboard_config.json', 'utf8'));
+    for (const [guildId, config] of killboardData) {
+      const currentConfig = global.guildConfig.get(guildId) || {};
+      global.guildConfig.set(guildId, { ...currentConfig, killboard: config });
+    }
+    console.log(`💀 Configurações do Killboard carregadas`);
+  }
 } catch (error) {
   console.error('❌ Erro ao carregar dados persistidos:', error);
 }
@@ -120,6 +137,25 @@ client.once(Events.ClientReady, async () => {
   EventHandler.initialize();
   console.log('📝 Sistemas inicializados: Database + Registro + Eventos');
 
+  try {
+    let killboardsIniciados = 0;
+    for (const [guildId, config] of global.guildConfig.entries()) {
+      if (config.killboard?.enabled && config.killboard?.guildIdAlbion) {
+        const guild = client.guilds.cache.get(guildId);
+        if (guild) {
+          KillboardHandler.startPolling(guildId, config.killboard);
+          killboardsIniciados++;
+          console.log(`💀 Killboard iniciado para guild: ${guild.name}`);
+        }
+      }
+    }
+    if (killboardsIniciados > 0) {
+      console.log(`💀 Total de Killboards ativos: ${killboardsIniciados}`);
+    }
+  } catch (error) {
+    console.error('❌ Erro ao iniciar killboards:', error);
+  }
+
   // Registrar Slash Commands
   const commands = [
     instalarCommand.data.toJSON(),
@@ -128,7 +164,8 @@ client.once(Events.ClientReady, async () => {
     limparEventosCommand.data.toJSON(),
     limparSaldoCommand.data.toJSON(),
     limparXpCommand.data.toJSON(),
-    ajudaCommand.data.toJSON()
+    ajudaCommand.data.toJSON(),
+    killboardCommand.data.toJSON()
   ];
 
   const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
@@ -281,10 +318,47 @@ client.on(Events.InteractionCreate, async interaction => {
     if (interaction.isButton()) {
       const customId = interaction.customId;
 
-      // COMANDOS DE LIMPAR - Confirmações
       if (customId === 'confirmar_limpar_eventos' || customId === 'cancelar_limpar_eventos' ||
           customId === 'confirmar_limpar_saldo' || customId === 'cancelar_limpar_saldo' ||
           customId === 'confirmar_limpar_xp' || customId === 'cancelar_limpar_xp') {
+        return;
+      }
+
+      // KILLBOARD
+      if (customId === 'killboard_config') {
+        const modal = new ModalBuilder()
+          .setCustomId('modal_killboard_config')
+          .setTitle('⚙️ Configurar Killboard')
+          .addComponents(
+            new ActionRowBuilder().addComponents(
+              new TextInputBuilder()
+                .setCustomId('albion_guild_id')
+                .setLabel('ID da Guilda no Albion')
+                .setPlaceholder('Ex: 7YNYrLtkS0mKv3Ii3cHU1g')
+                .setStyle(TextInputStyle.Short)
+                .setRequired(true)
+                .setMinLength(20)
+                .setMaxLength(25)
+            )
+          );
+        await interaction.showModal(modal);
+        return;
+      }
+
+      if (customId === 'killboard_test_kill' || customId === 'killboard_test_death') {
+        await interaction.reply({
+          content: '📤 Envio de teste em desenvolvimento...',
+          ephemeral: true
+        });
+        return;
+      }
+
+      if (customId.startsWith('killboard_refresh_')) {
+        const eventId = customId.replace('killboard_refresh_', '');
+        await interaction.reply({
+          content: `🔄 Atualizando dados do evento ${eventId}...`,
+          ephemeral: true
+        });
         return;
       }
 
@@ -591,7 +665,6 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // ✅ NOVO: Sistema de Depósito de XP Múltiplo
       if (customId === 'btn_depositar_xp_manual') {
         await PerfilHandler.showDepositXpModal(interaction);
         return;
@@ -760,7 +833,6 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // ✅ NOVO: XP EVENT COM SISTEMA DE NÍVEIS E PROGRESSO
       if (customId.startsWith('xp_event_ver_progresso_')) {
         const eventId = customId.replace('xp_event_ver_progresso_', '');
         await XpEventHandler.handleVerProgresso(interaction, eventId);
@@ -868,13 +940,11 @@ client.on(Events.InteractionCreate, async interaction => {
 
     // USER SELECT MENUS
     if (interaction.isUserSelectMenu()) {
-      // ✅ NOVO: Suporte a seleção múltipla de usuários para XP
       if (interaction.customId === 'select_xp_target_users') {
         await PerfilHandler.processUserSelection(interaction);
         return;
       }
 
-      // LEGADO: Seleção individual (mantido para compatibilidade)
       if (interaction.customId === 'select_xp_target_user') {
         const targetUserId = interaction.values[0];
         await PerfilHandler.createManualXpModal(interaction, targetUserId);
@@ -988,13 +1058,29 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // ✅ NOVO: Modal para depósito de XP múltiplo
+      // KILLBOARD
+      if (interaction.customId === 'modal_killboard_config') {
+        const guildId = interaction.fields.getTextInputValue('albion_guild_id');
+        await interaction.deferReply({ ephemeral: true });
+
+        try {
+          const guildData = await KillboardHandler.setGuildId(interaction.guild.id, guildId);
+          await interaction.editReply({
+            content: `✅ **Killboard configurado!**\n\n🏰 Guilda: ${guildData.Name}\n📊 Monitoramento iniciado automaticamente.`
+          });
+        } catch (error) {
+          await interaction.editReply({
+            content: `❌ Erro ao configurar: ${error.message}`
+          });
+        }
+        return;
+      }
+
       if (interaction.customId === 'modal_depositar_xp_multi') {
         await PerfilHandler.processManualXpDeposit(interaction);
         return;
       }
 
-      // LEGADO: Mantido para compatibilidade com depósito individual
       if (interaction.customId.startsWith('modal_depositar_xp_')) {
         const targetUserId = interaction.customId.replace('modal_depositar_xp_', '');
         await PerfilHandler.processManualXpDeposit(interaction, targetUserId);
@@ -1075,6 +1161,14 @@ process.on('SIGINT', async () => {
     fs.writeFileSync('./data/blacklist.json', JSON.stringify([...global.blacklist], null, 2));
     fs.writeFileSync('./data/historico.json', JSON.stringify([...global.historicoRegistros], null, 2));
 
+    const killboardConfigs = [];
+    for (const [guildId, config] of global.guildConfig.entries()) {
+      if (config.killboard) {
+        killboardConfigs.push([guildId, config.killboard]);
+      }
+    }
+    fs.writeFileSync('./data/killboard_config.json', JSON.stringify(killboardConfigs, null, 2));
+
     console.log('✅ Dados salvos com sucesso!');
   } catch (error) {
     console.error('❌ Erro ao salvar dados:', error);
@@ -1091,6 +1185,14 @@ process.on('SIGTERM', async () => {
 
     fs.writeFileSync('./data/blacklist.json', JSON.stringify([...global.blacklist], null, 2));
     fs.writeFileSync('./data/historico.json', JSON.stringify([...global.historicoRegistros], null, 2));
+
+    const killboardConfigs = [];
+    for (const [guildId, config] of global.guildConfig.entries()) {
+      if (config.killboard) {
+        killboardConfigs.push([guildId, config.killboard]);
+      }
+    }
+    fs.writeFileSync('./data/killboard_config.json', JSON.stringify(killboardConfigs, null, 2));
 
     console.log('✅ Dados salvos com sucesso!');
   } catch (error) {
