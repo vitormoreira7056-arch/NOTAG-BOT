@@ -20,7 +20,7 @@ class MarketHandler {
         // Armazenar buscas em andamento
         this.activeSearches = new Map();
 
-        // 🛒 CATEGORIAS DE ITENS ORGANIZADAS (sem emojis nos IDs)
+        // CATEGORIAS DE ITENS ORGANIZADAS
         this.itemCategories = {
             weapons: {
                 name: 'Armas',
@@ -266,7 +266,7 @@ class MarketHandler {
             const categoryOptions = Object.keys(this.itemCategories).map(key => {
                 const cat = this.itemCategories[key];
                 return new StringSelectMenuOptionBuilder()
-                    .setLabel(cat.name) // Nome simples sem emoji
+                    .setLabel(cat.name)
                     .setValue(key)
                     .setDescription(`Ver itens de ${cat.name}`);
             });
@@ -462,7 +462,7 @@ class MarketHandler {
     }
 
     /**
-     * Atualiza filtros quando usuário seleciona
+     * Atualiza filtros quando usuário seleciona - CORRIGIDO
      */
     async updateFilter(interaction, type, searchId, value) {
         try {
@@ -505,22 +505,75 @@ class MarketHandler {
                     }
                 );
 
-            // Atualizar componentes
-            const components = interaction.message.components;
-            const lastRow = components[components.length - 1];
+            // ⭐ CORREÇÃO: Recriar os selects do zero com as seleções marcadas
+            const selectedItem = searchData.item;
 
-            if (canSearch) {
-                lastRow.components[0].setDisabled(false);
-            }
+            // Recriar select de Tier
+            const tierOptions = selectedItem.tiers.map(t => 
+                new StringSelectMenuOptionBuilder()
+                    .setLabel(`Tier ${t}`)
+                    .setValue(`${t}`)
+                    .setDefault(searchData.tier === `${t}`)
+            );
+
+            const tierSelect = new StringSelectMenuBuilder()
+                .setCustomId(`market_filter_tier_${searchId}`)
+                .setPlaceholder('Selecione o Tier')
+                .addOptions(tierOptions);
+
+            // Recriar select de Enchant
+            const enchantSelect = new StringSelectMenuBuilder()
+                .setCustomId(`market_filter_enchant_${searchId}`)
+                .setPlaceholder('Selecione o Encantamento')
+                .addOptions(
+                    this.enchants.map(e => new StringSelectMenuOptionBuilder()
+                        .setLabel(e.label)
+                        .setValue(e.value)
+                        .setDefault(searchData.enchant === e.value)
+                    )
+                );
+
+            // Recriar select de Quality
+            const qualitySelect = new StringSelectMenuBuilder()
+                .setCustomId(`market_filter_quality_${searchId}`)
+                .setPlaceholder('Selecione a Qualidade')
+                .addOptions(
+                    this.qualities.map(q => new StringSelectMenuOptionBuilder()
+                        .setLabel(q.name)
+                        .setValue(q.value)
+                        .setDefault(searchData.quality === q.value)
+                    )
+                );
+
+            const row1 = new ActionRowBuilder().addComponents(tierSelect);
+            const row2 = new ActionRowBuilder().addComponents(enchantSelect);
+            const row3 = new ActionRowBuilder().addComponents(qualitySelect);
+
+            // ⭐ CORREÇÃO: Recriar botões do zero (não podemos editar componentes recebidos)
+            const buttons = new ActionRowBuilder()
+                .addComponents(
+                    new ButtonBuilder()
+                        .setCustomId(`market_search_confirm_${searchId}`)
+                        .setLabel('🔍 Buscar Preços')
+                        .setStyle(ButtonStyle.Success)
+                        .setDisabled(!canSearch),
+                    new ButtonBuilder()
+                        .setCustomId(`market_cancel_${searchId}`)
+                        .setLabel('❌ Cancelar')
+                        .setStyle(ButtonStyle.Danger)
+                );
 
             await interaction.update({
                 embeds: [embed],
-                components: components
+                components: [row1, row2, row3, buttons]
             });
 
         } catch (error) {
             console.error('[MarketHandler] Erro ao atualizar filtro:', error);
-            throw error;
+            await interaction.reply({
+                content: '❌ Erro ao atualizar filtro.',
+                ephemeral: true
+            });
         }
     }
 
