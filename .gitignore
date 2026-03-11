@@ -131,3 +131,25 @@ dist
 
 # Replit debugger
 .breakpoints
+
+# ==========================================
+# 🚨 IMPORTANTE - DADOS DO BOT NÃO SÃO VERSIONADOS
+# ==========================================
+
+# Pasta de dados (saldos, histórico, blacklist, database SQLite)
+/data/
+data/
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Backups locais
+/backups/
+backups/
+*.backup
+*.bak
+
+# Arquivos de configuração local que não devem ir pro GitHub
+config.local.json
+settings.local.json
