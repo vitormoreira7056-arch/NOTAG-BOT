@@ -183,6 +183,6 @@ Uso:
   node scripts/backup.js restore [nome]   Restorna backup específico
   node scripts/backup.js list             Lista todos os backups
 
-⚠️  IMPORTANTE: Sempre faça backup antes de puxar do GitHub!!
+⚠️  IMPORTANTE: Sempre faça backup antes de puxar do GitHub!
 `);
 }
