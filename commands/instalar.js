@@ -1,5 +1,6 @@
-const { SlashCommandBuilder, PermissionFlagsBits } = require('discord.js');
+const { SlashCommandBuilder, PermissionFlagsBits, ChannelType } = require('discord.js');
 const SetupManager = require('../handlers/setupManager');
+const KillboardHandler = require('../handlers/killboardHandler');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -8,8 +9,8 @@ module.exports = {
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
   async execute(interaction, client) {
-    const isADM = interaction.member.roles.cache.some(r => r.name === 'ADM') || 
-                  interaction.member.permissions.has(PermissionFlagsBits.Administrator);
+    const isADM = interaction.member.roles.cache.some(r => r.name === 'ADM') ||
+      interaction.member.permissions.has(PermissionFlagsBits.Administrator);
 
     if (!isADM) {
       return interaction.reply({
@@ -24,14 +25,29 @@ module.exports = {
       const setup = new SetupManager(interaction.guild, interaction);
       const result = await setup.install();
 
+      // 🎯 NOVO: Instalar Killboard automaticamente após setup principal
+      try {
+        await interaction.editReply({
+          content: '🏗️ Estrutura base instalada! Configurando Killboard...',
+          embeds: []
+        });
+
+        await this.installKillboard(interaction.guild);
+        result.createdCategories.push('💀 KILLBOARD');
+        result.createdChannels.push('💀-kill-feed');
+        result.createdChannels.push('☠️-death-feed');
+      } catch (killboardError) {
+        console.log('[Instalar] Erro ao criar killboard (pode já existir):', killboardError.message);
+      }
+
       const embedResumo = {
         color: 0x2ECC71,
         title: '🏗️ **INSTALAÇÃO CONCLUÍDA**',
-        description: result.message,
+        description: result.message + '\n\n💀 **Killboard configurado automaticamente!**\nUse `/killboard config [guildId]` para ativar o monitoramento.',
         fields: [
           {
             name: '🆕 Canais Criados',
-            value: result.createdChannels.length > 0 
+            value: result.createdChannels.length > 0
               ? result.createdChannels.slice(0, 15).map(c => `• ${c}`).join('\n') +
                 (result.createdChannels.length > 15 ? `\n... e mais ${result.createdChannels.length - 15}` : '')
               : 'Nenhum canal novo criado',
@@ -80,5 +96,130 @@ module.exports = {
         embeds: []
       });
     }
+  },
+
+  /**
+   * 🎯 NOVO: Instala a estrutura do Killboard
+   */
+  async installKillboard(guild) {
+    const botMember = guild.members.me;
+
+    // Verificar se já existe categoria
+    const existingCategory = guild.channels.cache.find(
+      c => c.name === '💀 KILLBOARD' && c.type === ChannelType.GuildCategory
+    );
+
+    let killboardCategory;
+
+    if (!existingCategory) {
+      // Criar categoria
+      killboardCategory = await guild.channels.create({
+        name: '💀 KILLBOARD',
+        type: ChannelType.GuildCategory,
+        position: 99, // Colocar no final
+        permissionOverwrites: [
+          {
+            id: guild.id,
+            allow: [PermissionFlagsBits.ViewChannel],
+            deny: [PermissionFlagsBits.SendMessages, PermissionFlagsBits.Connect, PermissionFlagsBits.Speak]
+          },
+          {
+            id: botMember.id,
+            allow: [
+              PermissionFlagsBits.ViewChannel,
+              PermissionFlagsBits.SendMessages,
+              PermissionFlagsBits.EmbedLinks,
+              PermissionFlagsBits.AttachFiles,
+              PermissionFlagsBits.ReadMessageHistory
+            ]
+          }
+        ]
+      });
+      console.log(`[Instalar] Categoria KILLBOARD criada: ${killboardCategory.id}`);
+    } else {
+      killboardCategory = existingCategory;
+      console.log(`[Instalar] Categoria KILLBOARD já existe: ${killboardCategory.id}`);
+    }
+
+    // Verificar/criar canal de kills
+    const existingKillChannel = guild.channels.cache.find(
+      c => c.name === '💀-kill-feed' && c.parentId === killboardCategory.id
+    );
+
+    if (!existingKillChannel) {
+      await guild.channels.create({
+        name: '💀-kill-feed',
+        type: ChannelType.GuildText,
+        parent: killboardCategory.id,
+        topic: '💀 Kills da Guilda - Monitoramento automático via API Albion Online',
+        slowMode: 5, // 5 segundos entre mensagens (evitar spam)
+        permissionOverwrites: [
+          {
+            id: guild.id,
+            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory],
+            deny: [PermissionFlagsBits.SendMessages, PermissionFlagsBits.AddReactions]
+          },
+          {
+            id: botMember.id,
+            allow: [
+              PermissionFlagsBits.ViewChannel,
+              PermissionFlagsBits.SendMessages,
+              PermissionFlagsBits.EmbedLinks,
+              PermissionFlagsBits.AttachFiles,
+              PermissionFlagsBits.ReadMessageHistory
+            ]
+          }
+        ]
+      });
+      console.log('[Instalar] Canal 💀-kill-feed criado');
+    }
+
+    // Verificar/criar canal de deaths
+    const existingDeathChannel = guild.channels.cache.find(
+      c => c.name === '☠️-death-feed' && c.parentId === killboardCategory.id
+    );
+
+    if (!existingDeathChannel) {
+      await guild.channels.create({
+        name: '☠️-death-feed',
+        type: ChannelType.GuildText,
+        parent: killboardCategory.id,
+        topic: '☠️ Mortes da Guilda - Monitoramento automático via API Albion Online',
+        slowMode: 5,
+        permissionOverwrites: [
+          {
+            id: guild.id,
+            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory],
+            deny: [PermissionFlagsBits.SendMessages, PermissionFlagsBits.AddReactions]
+          },
+          {
+            id: botMember.id,
+            allow: [
+              PermissionFlagsBits.ViewChannel,
+              PermissionFlagsBits.SendMessages,
+              PermissionFlagsBits.EmbedLinks,
+              PermissionFlagsBits.AttachFiles,
+              PermissionFlagsBits.ReadMessageHistory
+            ]
+          }
+        ]
+      });
+      console.log('[Instalar] Canal ☠️-death-feed criado');
+    }
+
+    // Enviar mensagem de boas-vindas/configuração no canal de kills
+    try {
+      const killChannel = guild.channels.cache.find(c => c.name === '💀-kill-feed');
+      if (killChannel) {
+        await KillboardHandler.sendConfigPanel(killChannel);
+      }
+    } catch (e) {
+      console.log('[Instalar] Não foi possível enviar painel de config:', e.message);
+    }
+
+    return {
+      category: killboardCategory,
+      success: true
+    };
   }
 };

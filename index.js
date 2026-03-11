@@ -85,6 +85,7 @@ global.orbTemp = new Map();
 global.guildaRegistroTemp = new Map();
 global.pendingBauSales = new Map();
 global.client = client;
+global.xpDepositTemp = new Map(); // ✅ NOVO: Para sistema de depósito de XP múltiplo
 
 // Carregar dados persistidos (blacklist e histórico)
 try {
@@ -282,8 +283,8 @@ client.on(Events.InteractionCreate, async interaction => {
 
       // COMANDOS DE LIMPAR - Confirmações
       if (customId === 'confirmar_limpar_eventos' || customId === 'cancelar_limpar_eventos' ||
-        customId === 'confirmar_limpar_saldo' || customId === 'cancelar_limpar_saldo' ||
-        customId === 'confirmar_limpar_xp' || customId === 'cancelar_limpar_xp') {
+          customId === 'confirmar_limpar_saldo' || customId === 'cancelar_limpar_saldo' ||
+          customId === 'confirmar_limpar_xp' || customId === 'cancelar_limpar_xp') {
         return;
       }
 
@@ -584,14 +585,30 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
-      // ALBION ACADEMY
+      // ALBION ACADEMY / PERFIL
       if (customId === 'btn_criar_xp_event') {
         await XpEventHandler.showCreateEventModal(interaction);
         return;
       }
 
+      // ✅ NOVO: Sistema de Depósito de XP Múltiplo
       if (customId === 'btn_depositar_xp_manual') {
         await PerfilHandler.showDepositXpModal(interaction);
+        return;
+      }
+
+      if (customId === 'xp_select_users') {
+        await PerfilHandler.openUserSelection(interaction);
+        return;
+      }
+
+      if (customId === 'xp_clear_users') {
+        await PerfilHandler.clearUserSelection(interaction);
+        return;
+      }
+
+      if (customId === 'xp_proceed_to_modal') {
+        await PerfilHandler.createManualXpModal(interaction);
         return;
       }
 
@@ -733,7 +750,7 @@ client.on(Events.InteractionCreate, async interaction => {
       if (customId.startsWith('confirmar_guilda_')) {
         const parts = customId.replace('confirmar_guilda_', '').split('_');
         const server = parts[0];
-        const guildName = parts.slice(1).join(' ');
+        const guildName = parts.slice(1).join('_');
         await ConfigActions.confirmarGuildaRegistro(interaction, server, guildName);
         return;
       }
@@ -851,9 +868,21 @@ client.on(Events.InteractionCreate, async interaction => {
 
     // USER SELECT MENUS
     if (interaction.isUserSelectMenu()) {
+      // ✅ NOVO: Suporte a seleção múltipla de usuários para XP
+      if (interaction.customId === 'select_xp_target_users') {
+        await PerfilHandler.processUserSelection(interaction);
+        return;
+      }
+
+      // LEGADO: Seleção individual (mantido para compatibilidade)
       if (interaction.customId === 'select_xp_target_user') {
         const targetUserId = interaction.values[0];
         await PerfilHandler.createManualXpModal(interaction, targetUserId);
+        return;
+      }
+
+      if (interaction.customId === 'select_orb_users') {
+        await OrbHandler.processUserSelection(interaction);
         return;
       }
     }
@@ -959,6 +988,13 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
+      // ✅ NOVO: Modal para depósito de XP múltiplo
+      if (interaction.customId === 'modal_depositar_xp_multi') {
+        await PerfilHandler.processManualXpDeposit(interaction);
+        return;
+      }
+
+      // LEGADO: Mantido para compatibilidade com depósito individual
       if (interaction.customId.startsWith('modal_depositar_xp_')) {
         const targetUserId = interaction.customId.replace('modal_depositar_xp_', '');
         await PerfilHandler.processManualXpDeposit(interaction, targetUserId);
