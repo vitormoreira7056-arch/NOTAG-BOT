@@ -10,6 +10,7 @@ const {
   ButtonStyle
 } = require('discord.js');
 const AlbionAPI = require('./albionApi');
+const Database = require('../utils/database');
 
 class RegistrationModal {
   static createRegistrationModal() {
@@ -118,8 +119,10 @@ class RegistrationModal {
       const arma = interaction.fields.getTextInputValue('reg_arma').trim();
       const convidadoPor = interaction.fields.getTextInputValue('reg_convidado_por')?.trim() || null;
 
+      // Verificar blacklist NO BANCO DE DADOS
       const RegistrationActions = require('./registrationActions');
-      const blacklistCheck = RegistrationActions.checkBlacklist(nick, interaction.user.id);
+      const blacklistCheck = await RegistrationActions.checkBlacklist(nick, interaction.user.id);
+
       if (blacklistCheck.isBlacklisted) {
         return await interaction.editReply({
           content: `🚫 **Você está na blacklist!**\n\nMotivo: ${blacklistCheck.reason}\n\nEntre em contato com a staff se acredita que houve um erro.`,
@@ -234,7 +237,7 @@ class RegistrationModal {
       tempData.platform = platform;
       const { nick, guilda, arma, server, convidadoPor } = tempData;
 
-      // 🎯 NOVA LÓGICA: Verificação com tratamento de erro aprimorado
+      // NOVA LÓGICA: Verificação com tratamento de erro aprimorado
       let verification = { valid: false, error: null, details: null, apiStatus: null };
       let usarRegistroOffline = false;
       let apiError = false;
@@ -263,20 +266,11 @@ class RegistrationModal {
       if (!apiVerified && !usarRegistroOffline) {
         // API funcionou mas jogador não foi validado (nick errado, guilda errada, etc)
         console.log(`⚠️ API não validou jogador "${nick}": ${verification.error}`);
-
-        // Ainda assim permitimos o registro, mas marcamos como não verificado
-        // Se quiser BLOQUEAR registros não validados, descomente o código abaixo:
-        /*
-        return await interaction.editReply({
-          content: `❌ **Validação falhou:** ${verification.error}\n\nVerifique se o nick e a guilda estão corretos e tente novamente.`,
-          components: [],
-          embeds: []
-        });
-        */
       }
 
+      // Buscar histórico de recusas NO BANCO DE DADOS
       const RegistrationActions = require('./registrationActions');
-      const historico = RegistrationActions.getHistoricoRecusas(interaction.user.id, nick);
+      const historico = await RegistrationActions.getHistoricoRecusas(interaction.user.id, nick);
       const tentativasAnteriores = historico.length;
 
       const registroId = `reg_${Date.now()}_${interaction.user.id}`;
