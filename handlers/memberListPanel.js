@@ -14,6 +14,7 @@ const Database = require('../utils/database');
  * CORREÇÕES:
  * - Adicionado deferReply/deferUpdate antes de operações pesadas
  * - Tratamento de erro para InteractionNotReplied
+ * - 🆕 CORRIGIDO: Agora usa Database.getAllUsers(guildId) em vez de Database.db (que não existe)
  */
 class MemberListPanel {
   static activePages = new Map();
@@ -116,17 +117,24 @@ class MemberListPanel {
       const novosMembros = members.filter(m => m.joinedTimestamp > umaSemanaAtras);
       const novosNomes = novosMembros.map(m => `<@${m.id}>`).slice(0, 5);
 
+      // 🆕 CORREÇÃO: Buscar usuários do banco específico deste servidor usando getAllUsers
       let topParticipantes = [];
       try {
-        const allUsers = await Database.db.allAsync('SELECT user_id, eventos_participados, level FROM users WHERE eventos_participados > 0 ORDER BY eventos_participados DESC LIMIT 3');
-        for (const user of allUsers) {
-          const member = members.get(user.user_id);
+        const allUsers = await Database.getAllUsers(guild.id); // ✅ CORRIGIDO: Passando guild.id
+        // Ordenar por eventos participados
+        const sortedUsers = allUsers
+          .filter(u => u.eventosParticipados > 0)
+          .sort((a, b) => (b.eventosParticipados || 0) - (a.eventosParticipados || 0))
+          .slice(0, 3);
+
+        for (const user of sortedUsers) {
+          const member = members.get(user.userId);
           if (member) {
-            topParticipantes.push(`<@${user.user_id}> (${user.eventos_participados} eventos)`);
+            topParticipantes.push(`<@${user.userId}> (${user.eventosParticipados} eventos)`);
           }
         }
       } catch (e) {
-        console.log('[MemberList] Não foi possível buscar top participantes do banco');
+        console.log('[MemberList] Não foi possível buscar top participantes do banco:', e.message);
       }
 
       const totalAtivos = online + idle + dnd;
@@ -329,7 +337,6 @@ class MemberListPanel {
 
     } catch (error) {
       console.error('[MemberList] Erro no filtro:', error);
-      // 🎯 CORREÇÃO: Verificar se já respondeu antes de tentar followUp
       if (!interaction.replied && !interaction.deferred) {
         await interaction.reply({
           content: '❌ Erro ao aplicar filtro.',
@@ -365,19 +372,25 @@ class MemberListPanel {
           break;
         case 'level':
           try {
-            const users = await Database.db.allAsync('SELECT user_id, level FROM users ORDER BY level DESC');
-            const orderMap = new Map(users.map((u, i) => [u.user_id, i]));
-            members.sort((a, b) => (orderMap.get(a.id) || 999) - (orderMap.get(b.id) || 999));
+            // 🆕 CORREÇÃO: Usando getAllUsers com guildId e ordenando manualmente
+            const allUsers = await Database.getAllUsers(guild.id);
+            const levelMap = new Map();
+            allUsers.forEach(u => levelMap.set(u.userId, u.level || 1));
+            members.sort((a, b) => (levelMap.get(b.id) || 1) - (levelMap.get(a.id) || 1));
           } catch (e) {
+            console.log('[MemberList] Erro ao ordenar por nível:', e.message);
             members.sort((a, b) => a.id.localeCompare(b.id));
           }
           break;
         case 'activity':
           try {
-            const users = await Database.db.allAsync('SELECT user_id, eventos_participados FROM users ORDER BY eventos_participados DESC');
-            const orderMap = new Map(users.map((u, i) => [u.user_id, i]));
-            members.sort((a, b) => (orderMap.get(a.id) || 999) - (orderMap.get(b.id) || 999));
+            // 🆕 CORREÇÃO: Usando getAllUsers com guildId e ordenando por eventos
+            const allUsers = await Database.getAllUsers(guild.id);
+            const eventMap = new Map();
+            allUsers.forEach(u => eventMap.set(u.userId, u.eventosParticipados || 0));
+            members.sort((a, b) => (eventMap.get(b.id) || 0) - (eventMap.get(a.id) || 0));
           } catch (e) {
+            console.log('[MemberList] Erro ao ordenar por atividade:', e.message);
             members.sort((a, b) => a.id.localeCompare(b.id));
           }
           break;
@@ -414,7 +427,7 @@ class MemberListPanel {
       const memberData = [];
       for (const member of pageMembers) {
         try {
-          const userData = await Database.getUser(member.id);
+          const userData = await Database.getUser(interaction.guild.id, member.id); // ✅ Já estava correto aqui
           memberData.push({
             member,
             level: userData?.level || 1,
@@ -500,7 +513,6 @@ class MemberListPanel {
         )
       ];
 
-      // 🎯 CORREÇÃO: Usar editReply ou update baseado no estado da interação
       if (interaction.isMessageComponent()) {
         await interaction.editReply({ embeds: [embed], components });
       } else {
@@ -543,6 +555,7 @@ class MemberListPanel {
         members = members.filter(m => m.roles.cache.some(r => r.name === filter));
       }
 
+      // Re-ordenar se necessário
       switch(sortBy) {
         case 'name_asc':
           members.sort((a, b) => (a.displayName || a.user.username).localeCompare(b.displayName || b.user.username));
@@ -550,6 +563,20 @@ class MemberListPanel {
         case 'oldest':
           members.sort((a, b) => (a.joinedTimestamp || 0) - (b.joinedTimestamp || 0));
           break;
+        case 'level': {
+          const allUsers = await Database.getAllUsers(interaction.guild.id);
+          const levelMap = new Map();
+          allUsers.forEach(u => levelMap.set(u.userId, u.level || 1));
+          members.sort((a, b) => (levelMap.get(b.id) || 1) - (levelMap.get(a.id) || 1));
+          break;
+        }
+        case 'activity': {
+          const allUsers = await Database.getAllUsers(interaction.guild.id);
+          const eventMap = new Map();
+          allUsers.forEach(u => eventMap.set(u.userId, u.eventosParticipados || 0));
+          members.sort((a, b) => (eventMap.get(b.id) || 0) - (eventMap.get(a.id) || 0));
+          break;
+        }
         default:
           members.sort((a, b) => (b.joinedTimestamp || 0) - (a.joinedTimestamp || 0));
       }
