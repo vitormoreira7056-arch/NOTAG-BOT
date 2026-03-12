@@ -1,469 +1,753 @@
-const {
-  EmbedBuilder,
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle,
-  StringSelectMenuBuilder
-} = require('discord.js');
-
 /**
- * Handler de Estatísticas de Eventos - Versão Corrigida
- * Usa global.finishedEvents + Database em vez de buscar apenas na memória
+ * registrationActions.js - Sistema de Registro e Aprovação de Membros
+ * 
+ * VERSÃO CORRIGIDA - Timezone UTC Consistente
+ * Compatível com database.js (timezone UTC)
+ * 
+ * REGRAS APLICADAS:
+ * 1. Todas as datas via Database.getCurrentTimestamp() (UTC ms)
+ * 2. Validação de blacklist antes de processar registros
+ * 3. Workflow de aprovação: Member/Alliance/Guest com roles específicos
+ * 4. Sanitização de inputs (nick, guilda, etc) contra injeção
+ * 5. Logs de auditoria em todas as ações de aprovação/rejeição
+ * 6. Limpeza de estado pendente após processamento
  */
 
-class EventStatsHandler {
-  static activeFilters = new Map();
+const { 
+  EmbedBuilder, 
+  ActionRowBuilder, 
+  ButtonBuilder, 
+  ButtonStyle,
+  PermissionFlagsBits,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle
+} = require('discord.js');
+const Database = require('./database.js');
+
+/**
+ * Status de registro
+ */
+const REGISTRATION_STATUS = {
+  PENDING: 'pending',
+  APPROVED: 'approved',
+  REJECTED: 'rejected'
+};
+
+/**
+ * Tipos de aprovação
+ */
+const APPROVAL_TYPE = {
+  MEMBER: 'member',
+  ALLIANCE: 'alliance',
+  GUEST: 'guest'
+};
+
+/**
+ * Gerenciador de Ações de Registro
+ */
+class RegistrationActions {
+  constructor() {
+    // Map<userId, registrationData> - Registros pendentes em memória (temporário)
+    this.pendingRegistrations = new Map();
+
+    // Map<registrationId, lock> - Locks para operações atômicas
+    this.operationLocks = new Map();
+
+    console.log('[RegistrationActions] Inicializado com timezone UTC');
+  }
 
   /**
-   * Wrapper para compatibilidade
+   * Gera timestamp UTC via Database
    */
-  static async sendPanel(channel, guild) {
+  getTimestamp() {
+    return Database.getCurrentTimestamp();
+  }
+
+  /**
+   * Sistema de locking para prevenir race conditions
+   */
+  async acquireLock(id) {
+    const startTime = this.getTimestamp();
+    const timeout = 5000; // 5s timeout
+
+    while (this.operationLocks.has(id)) {
+      if (this.getTimestamp() - startTime > timeout) {
+        throw new Error(`Timeout acquiring lock for registration ${id}`);
+      }
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+
+    this.operationLocks.set(id, true);
+    return () => this.operationLocks.delete(id);
+  }
+
+  /**
+   * Sanitiza string de input (prevenir injeção e limitar tamanho)
+   */
+  sanitizeInput(input, maxLength = 100) {
+    if (!input || typeof input !== 'string') return '';
+
+    // Remove caracteres de controle e trim
+    let clean = input.replace(/[\x00-\x1F\x7F]/g, '').trim();
+
+    // Limita tamanho
+    if (clean.length > maxLength) {
+      clean = clean.substring(0, maxLength);
+    }
+
+    // Previne menções de everyone/here
+    clean = clean.replace(/@(everyone|here)/gi, '@$1');
+
+    return clean;
+  }
+
+  /**
+   * Valida dados do formulário de registro
+   */
+  validateRegistrationData(data) {
+    const errors = [];
+
+    // Validação de nick (obrigatório, 3-30 chars)
+    if (!data.nick || data.nick.length < 3 || data.nick.length > 30) {
+      errors.push('Nick deve ter entre 3 e 30 caracteres');
+    }
+
+    // Validação de guilda (obrigatório para membros, opcional para guests)
+    if (data.type === APPROVAL_TYPE.MEMBER && (!data.guildName || data.guildName.length < 2)) {
+      errors.push('Nome da guilda é obrigatório para registro de membro');
+    }
+
+    // Validação de plataforma
+    const validPlatforms = ['pc', 'mobile', 'ambos'];
+    if (data.platform && !validPlatforms.includes(data.platform.toLowerCase())) {
+      errors.push('Plataforma inválida (use: PC, Mobile ou Ambos)');
+    }
+
+    // Validação de tipo de registro
+    const validTypes = Object.values(APPROVAL_TYPE);
+    if (!data.type || !validTypes.includes(data.type)) {
+      errors.push('Tipo de registro inválido');
+    }
+
+    if (errors.length > 0) {
+      throw new Error(errors.join('\n'));
+    }
+
+    return true;
+  }
+
+  /**
+   * Inicia processo de registro (abre modal)
+   */
+  async startRegistration(interaction, type = APPROVAL_TYPE.MEMBER) {
     try {
-      console.log(`[EventStats] Criando painel de eventos`);
-      return await this.createAndSendPanel(channel, guild);
+      console.log(`[startRegistration] Usuário ${interaction.user.id} iniciando registro tipo ${type}`);
+
+      const userId = interaction.user.id;
+
+      // Verifica se usuário já tem registro pendente
+      const existingRegistration = await Database.getUserRegistration(interaction.guild.id, userId);
+      if (existingRegistration && existingRegistration.status === REGISTRATION_STATUS.PENDING) {
+        return interaction.reply({
+          content: '⚠️ Você já possui um registro pendente de aprovação. Aguarde a moderação.',
+          ephemeral: true
+        });
+      }
+
+      // Verifica blacklist GLOBAL (impede registro se estiver na lista)
+      const blacklistCheck = await Database.isBlacklisted(userId);
+      if (blacklistCheck) {
+        console.warn(`[Blacklist] Usuário ${userId} tentou registrar mas está na blacklist`);
+        return interaction.reply({
+          content: '❌ Você não possui permissão para se registrar neste servidor.',
+          ephemeral: true
+        });
+      }
+
+      // Cria modal de registro
+      const modal = new ModalBuilder()
+        .setCustomId(`registration_modal_${type}_${userId}`)
+        .setTitle(`Registro de ${type.charAt(0).toUpperCase() + type.slice(1)}`);
+
+      // Campos do modal
+      const nickInput = new TextInputBuilder()
+        .setCustomId('nick_input')
+        .setLabel('Seu Nick em Albion Online')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('Ex: SirLancelot')
+        .setRequired(true)
+        .setMinLength(3)
+        .setMaxLength(30);
+
+      const guildInput = new TextInputBuilder()
+        .setCustomId('guild_input')
+        .setLabel('Nome da sua Guilda')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('Ex: Noteworthy')
+        .setRequired(type === APPROVAL_TYPE.MEMBER)
+        .setMaxLength(50);
+
+      const platformInput = new TextInputBuilder()
+        .setCustomId('platform_input')
+        .setLabel('Plataforma que joga')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('PC / Mobile / Ambos')
+        .setRequired(false)
+        .setMaxLength(20);
+
+      const weaponInput = new TextInputBuilder()
+        .setCustomId('weapon_input')
+        .setLabel('Arma/Build principal')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('Ex: Claymore, Frost Staff...')
+        .setRequired(false)
+        .setMaxLength(50);
+
+      const screenshotInput = new TextInputBuilder()
+        .setCustomId('screenshot_input')
+        .setLabel('Link do screenshot do perfil (Imgur/Discord)')
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder('https://...')
+        .setRequired(false)
+        .setMaxLength(200);
+
+      // Adiciona campos ao modal
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(nickInput),
+        new ActionRowBuilder().addComponents(guildInput),
+        new ActionRowBuilder().addComponents(platformInput),
+        new ActionRowBuilder().addComponents(weaponInput),
+        new ActionRowBuilder().addComponents(screenshotInput)
+      );
+
+      // Armazena tipo de registro em memória temporária (será usado no submit)
+      this.pendingRegistrations.set(userId, {
+        type: type,
+        guildId: interaction.guild.id,
+        startedAt: this.getTimestamp(),
+        expiresAt: this.getTimestamp() + (15 * 60 * 1000) // Expira em 15 min
+      });
+
+      await interaction.showModal(modal);
+      console.log(`[startRegistration] Modal exibido para usuário ${userId}`);
+
     } catch (error) {
-      console.error(`[EventStats] Erro no wrapper:`, error);
-      throw error;
+      console.error(`[startRegistration] Erro:`, error);
+      await interaction.reply({
+        content: `❌ Erro ao iniciar registro: ${error.message}`,
+        ephemeral: true
+      }).catch(console.error);
     }
   }
 
   /**
-   * Cria e envia o painel moderno
+   * Processa submissão do modal de registro
    */
-  static async createAndSendPanel(channel, guild) {
+  async handleModalSubmit(interaction) {
+    const releaseLock = await this.acquireLock(`modal_${interaction.user.id}`).catch(() => null);
+
     try {
-      if (!channel || !guild) {
-        console.error('[EventStats] Channel ou Guild undefined');
+      console.log(`[handleModalSubmit] Processando modal para ${interaction.user.id}`);
+      await interaction.deferReply({ ephemeral: true });
+
+      const userId = interaction.user.id;
+
+      // Recupera dados do processo de registro
+      const pendingData = this.pendingRegistrations.get(userId);
+      if (!pendingData) {
+        throw new Error('Sessão de registro expirada ou inválida. Tente novamente.');
+      }
+
+      // Verifica se não expirou
+      if (this.getTimestamp() > pendingData.expiresAt) {
+        this.pendingRegistrations.delete(userId);
+        throw new Error('Sessão de registro expirada (15 minutos). Tente novamente.');
+      }
+
+      // Extrai valores do modal
+      const nick = this.sanitizeInput(interaction.fields.getTextInputValue('nick_input'), 30);
+      const guildName = this.sanitizeInput(interaction.fields.getTextInputValue('guild_input'), 50);
+      const platform = this.sanitizeInput(interaction.fields.getTextInputValue('platform_input'), 20);
+      const weapon = this.sanitizeInput(interaction.fields.getTextInputValue('weapon_input'), 50);
+      const screenshotUrl = this.sanitizeInput(interaction.fields.getTextInputValue('screenshot_input'), 200);
+
+      // Valida dados
+      const registrationData = {
+        type: pendingData.type,
+        nick,
+        guildName,
+        platform,
+        weapon,
+        screenshotUrl
+      };
+
+      this.validateRegistrationData(registrationData);
+
+      const now = this.getTimestamp();
+
+      // Salva no banco de dados
+      const result = await Database.createRegistration({
+        userId: userId,
+        guildId: pendingData.guildId,
+        nick: nick,
+        guildName: guildName,
+        platform: platform,
+        weapon: weapon,
+        screenshotUrl: screenshotUrl,
+        type: pendingData.type,
+        status: REGISTRATION_STATUS.PENDING
+      });
+
+      // Log de auditoria
+      await Database.logAudit(pendingData.guildId, 'REGISTRATION_SUBMITTED', userId, {
+        registrationId: result.id,
+        nick,
+        guildName,
+        type: pendingData.type,
+        timestamp: now
+      });
+
+      // Limpa pendente
+      this.pendingRegistrations.delete(userId);
+
+      // Envia confirmação ao usuário
+      const embed = new EmbedBuilder()
+        .setTitle('✅ Registro Enviado')
+        .setDescription(`Seu registro como **${pendingData.type.toUpperCase()}** foi enviado para aprovação!`)
+        .addFields(
+          { name: '🎮 Nick', value: nick, inline: true },
+          { name: '🏰 Guilda', value: guildName || 'N/A', inline: true },
+          { name: '💻 Plataforma', value: platform || 'N/A', inline: true }
+        )
+        .setColor(0x3498db)
+        .setTimestamp(now);
+
+      await interaction.editReply({ embeds: [embed] });
+
+      // Notifica canal de moderação (se configurado)
+      await this.notifyModerators(interaction.guild, {
+        id: result.id,
+        userId,
+        nick,
+        guildName,
+        platform,
+        weapon,
+        type: pendingData.type,
+        timestamp: now
+      });
+
+      console.log(`[handleModalSubmit] Registro ${result.id} criado para ${userId}`);
+
+    } catch (error) {
+      console.error(`[handleModalSubmit] Erro:`, error);
+      await interaction.editReply({
+        content: `❌ Erro ao processar registro: ${error.message}`,
+        ephemeral: true
+      }).catch(console.error);
+    } finally {
+      if (releaseLock) releaseLock();
+    }
+  }
+
+  /**
+   * Aprova um registro pendente
+   */
+  async approveRegistration(interaction, registrationId, approvalType = null) {
+    const releaseLock = await this.acquireLock(`reg_${registrationId}`);
+
+    try {
+      console.log(`[approveRegistration] Mod ${interaction.user.id} aprovando registro ${registrationId}`);
+      await interaction.deferReply({ ephemeral: true });
+
+      // Busca registro no banco
+      const registration = await Database.getRegistrationById(registrationId);
+      if (!registration) {
+        throw new Error('Registro não encontrado');
+      }
+
+      if (registration.status !== REGISTRATION_STATUS.PENDING) {
+        throw new Error(`Registro já foi ${registration.status}`);
+      }
+
+      // Verifica permissões do moderador
+      const member = interaction.member;
+      const hasPermission = member.permissions.has(PermissionFlagsBits.ManageRoles) || 
+                           member.permissions.has(PermissionFlagsBits.Administrator);
+
+      if (!hasPermission) {
+        console.warn(`[Permission] Usuário ${member.id} tentou aprovar sem permissão`);
+        return interaction.editReply({
+          content: '❌ Você não tem permissão para aprovar registros.',
+          ephemeral: true
+        });
+      }
+
+      const now = this.getTimestamp();
+
+      // Determina tipo de aprovação e roles
+      const type = approvalType || registration.type || APPROVAL_TYPE.MEMBER;
+      const guildConfig = await Database.getGuildConfig(interaction.guild.id);
+
+      let roleId;
+      let approvalMessage;
+
+      switch (type) {
+        case APPROVAL_TYPE.MEMBER:
+          roleId = guildConfig.memberRole;
+          approvalMessage = 'Bem-vindo à guilda!';
+          break;
+        case APPROVAL_TYPE.ALLIANCE:
+          roleId = guildConfig.allianceRole;
+          approvalMessage = 'Bem-vindo como Aliado!';
+          break;
+        case APPROVAL_TYPE.GUEST:
+          roleId = guildConfig.guestRole;
+          approvalMessage = 'Bem-vindo como Convidado!';
+          break;
+        default:
+          throw new Error('Tipo de aprovação inválido');
+      }
+
+      // Atualiza status no banco
+      await Database.updateRegistrationStatus(
+        registrationId,
+        REGISTRATION_STATUS.APPROVED,
+        interaction.user.id,
+        null
+      );
+
+      // Adiciona role ao usuário
+      try {
+        const targetMember = await interaction.guild.members.fetch(registration.user_id);
+        if (targetMember && roleId) {
+          const role = await interaction.guild.roles.fetch(roleId);
+          if (role) {
+            await targetMember.roles.add(role);
+            console.log(`[approveRegistration] Role ${role.name} adicionada a ${registration.user_id}`);
+          }
+        }
+      } catch (roleError) {
+        console.error(`[approveRegistration] Erro ao adicionar role:`, roleError);
+        // Continua mesmo se falhar a role (registro já foi aprovado no DB)
+      }
+
+      // Log de auditoria
+      await Database.logAudit(interaction.guild.id, 'REGISTRATION_APPROVED', interaction.user.id, {
+        registrationId,
+        approvedUserId: registration.user_id,
+        type: type,
+        timestamp: now
+      });
+
+      // Notifica usuário aprovado (DM)
+      try {
+        const user = await interaction.client.users.fetch(registration.user_id);
+        const dmEmbed = new EmbedBuilder()
+          .setTitle('🎉 Registro Aprovado!')
+          .setDescription(`Seu registro em **${interaction.guild.name}** foi aprovado!`)
+          .addFields(
+            { name: 'Tipo', value: type.toUpperCase(), inline: true },
+            { name: 'Aprovado por', value: interaction.user.tag, inline: true }
+          )
+          .setColor(0x00ff00)
+          .setTimestamp(now);
+
+        await user.send({ embeds: [dmEmbed] });
+      } catch (dmError) {
+        console.log(`[approveRegistration] Não foi possível enviar DM para ${registration.user_id}`);
+      }
+
+      // Responde ao moderador
+      await interaction.editReply({
+        content: `✅ Registro de **${registration.nick}** aprovado como ${type.toUpperCase()}!`,
+        ephemeral: true
+      });
+
+      console.log(`[approveRegistration] Registro ${registrationId} aprovado por ${interaction.user.id}`);
+
+    } catch (error) {
+      console.error(`[approveRegistration] Erro:`, error);
+      await interaction.editReply({
+        content: `❌ Erro ao aprovar: ${error.message}`,
+        ephemeral: true
+      }).catch(console.error);
+      throw error;
+    } finally {
+      releaseLock();
+    }
+  }
+
+  /**
+   * Rejeita um registro
+   */
+  async rejectRegistration(interaction, registrationId, reason) {
+    const releaseLock = await this.acquireLock(`reg_${registrationId}`);
+
+    try {
+      console.log(`[rejectRegistration] Mod ${interaction.user.id} rejeitando registro ${registrationId}`);
+      await interaction.deferReply({ ephemeral: true });
+
+      const registration = await Database.getRegistrationById(registrationId);
+      if (!registration) {
+        throw new Error('Registro não encontrado');
+      }
+
+      if (registration.status !== REGISTRATION_STATUS.PENDING) {
+        throw new Error(`Registro já foi ${registration.status}`);
+      }
+
+      // Verifica permissões
+      const member = interaction.member;
+      const hasPermission = member.permissions.has(PermissionFlagsBits.ManageRoles) || 
+                           member.permissions.has(PermissionFlagsBits.Administrator);
+
+      if (!hasPermission) {
+        return interaction.editReply({
+          content: '❌ Sem permissão.',
+          ephemeral: true
+        });
+      }
+
+      const sanitizedReason = this.sanitizeInput(reason, 500);
+      const now = this.getTimestamp();
+
+      // Atualiza no banco
+      await Database.updateRegistrationStatus(
+        registrationId,
+        REGISTRATION_STATUS.REJECTED,
+        interaction.user.id,
+        sanitizedReason
+      );
+
+      // Log de auditoria
+      await Database.logAudit(interaction.guild.id, 'REGISTRATION_REJECTED', interaction.user.id, {
+        registrationId,
+        rejectedUserId: registration.user_id,
+        reason: sanitizedReason,
+        timestamp: now
+      });
+
+      // Notifica usuário
+      try {
+        const user = await interaction.client.users.fetch(registration.user_id);
+        const dmEmbed = new EmbedBuilder()
+          .setTitle('❌ Registro Rejeitado')
+          .setDescription(`Seu registro em **${interaction.guild.name}** foi rejeitado.`)
+          .addFields(
+            { name: 'Motivo', value: sanitizedReason || 'Não especificado', inline: false },
+            { name: 'Rejeitado por', value: interaction.user.tag, inline: true }
+          )
+          .setColor(0xff0000)
+          .setTimestamp(now);
+
+        await user.send({ embeds: [dmEmbed] });
+      } catch (dmError) {
+        console.log(`[rejectRegistration] Não foi possível enviar DM para ${registration.user_id}`);
+      }
+
+      await interaction.editReply({
+        content: `❌ Registro de **${registration.nick}** rejeitado.`,
+        ephemeral: true
+      });
+
+      console.log(`[rejectRegistration] Registro ${registrationId} rejeitado: ${sanitizedReason}`);
+
+    } catch (error) {
+      console.error(`[rejectRegistration] Erro:`, error);
+      await interaction.editReply({
+        content: `❌ Erro: ${error.message}`,
+        ephemeral: true
+      }).catch(console.error);
+      throw error;
+    } finally {
+      releaseLock();
+    }
+  }
+
+  /**
+   * Notifica moderadores sobre novo registro
+   */
+  async notifyModerators(guild, registrationData) {
+    try {
+      const guildConfig = await Database.getGuildConfig(guild.id);
+      const modChannelId = guildConfig.registrationChannel || guildConfig.logsChannel;
+
+      if (!modChannelId) {
+        console.log(`[notifyModerators] Canal de moderação não configurado para guild ${guild.id}`);
         return;
       }
 
-      // Dados iniciais (últimos 30 dias, todos os cargos)
-      const periodDays = 30;
-      const stats = await this.getParticipationStats(guild, periodDays);
+      const channel = await guild.channels.fetch(modChannelId);
+      if (!channel) return;
 
-      const embed = this.createModernEmbed(stats, guild, periodDays, 'Todos');
-      const components = this.createComponents();
+      const embed = new EmbedBuilder()
+        .setTitle('📝 Novo Registro Pendente')
+        .setDescription(`**${registrationData.nick}** solicitou registro como **${registrationData.type.toUpperCase()}**`)
+        .addFields(
+          { name: '🎮 Nick', value: registrationData.nick, inline: true },
+          { name: '🏰 Guilda', value: registrationData.guildName || 'N/A', inline: true },
+          { name: '💻 Plataforma', value: registrationData.platform || 'N/A', inline: true },
+          { name: '⚔️ Arma Principal', value: registrationData.weapon || 'N/A', inline: true },
+          { name: '🔗 Screenshot', value: registrationData.screenshotUrl || 'N/A', inline: false }
+        )
+        .setColor(0xffaa00)
+        .setTimestamp(registrationData.timestamp)
+        .setFooter({ text: `ID: ${registrationData.id} | User: ${registrationData.userId}` });
 
-      const message = await channel.send({
-        embeds: [embed],
-        components: components
-      });
-
-      console.log(`[EventStats] Painel enviado em #${channel.name}`);
-
-      // Armazena referência para atualizações futuras
-      this.activeFilters.set(guild.id, {
-        messageId: message.id,
-        channelId: channel.id,
-        periodDays: periodDays,
-        roleFilter: null
-      });
-
-    } catch (error) {
-      console.error('[EventStats] Erro criando painel:', error);
-      await channel.send({
-        content: '❌ Erro ao criar painel de eventos. Verifique o console.',
-        ephemeral: true
-      });
-    }
-  }
-
-  /**
-   * Busca estatísticas de participação usando global.finishedEvents + Database
-   */
-  static async getParticipationStats(guild, days, roleFilter = null) {
-    try {
-      const since = Date.now() - (days * 24 * 60 * 60 * 1000);
-
-      // ✅ CORREÇÃO: Buscar eventos tanto da memória quanto do banco de dados
-      let events = [];
-
-      // 1. Buscar de global.finishedEvents (memória)
-      if (global.finishedEvents && global.finishedEvents.size > 0) {
-        const memoryEvents = Array.from(global.finishedEvents.values()).filter(event => {
-          const eventDate = event.finalizadoEm || event.created_at || 0;
-          const matchesGuild = event.guildId === guild.id;
-          const matchesDate = days === 0 ? true : eventDate > since;
-          return matchesGuild && matchesDate;
-        });
-        events = [...events, ...memoryEvents];
-        console.log(`[EventStats] Encontrados ${memoryEvents.length} eventos na memória`);
-      }
-
-      // 2. Buscar do banco de dados (event_history)
-      try {
-        const Database = require('../utils/database');
-        const historyEvents = await Database.getEventHistory(guild.id, 100);
-
-        for (const historyEntry of historyEvents) {
-          const eventDate = historyEntry.timestamp || 0;
-          if (days === 0 || eventDate > since) {
-            // Converter dados do banco para formato compatível
-            const dados = historyEntry.dados || {};
-            const eventData = {
-              id: historyEntry.event_id,
-              guildId: historyEntry.guild_id,
-              finalizadoEm: historyEntry.timestamp,
-              nome: dados.eventoNome || 'Evento Arquivado',
-              participantes: new Map()
-            };
-
-            // Converter participantes do array para Map
-            if (dados.distribuicao && Array.isArray(dados.distribuicao)) {
-              for (const participante of dados.distribuicao) {
-                if (participante.userId) {
-                  eventData.participantes.set(participante.userId, {
-                    nick: participante.nick || 'Unknown',
-                    userId: participante.userId,
-                    tempoTotal: participante.tempo || 0
-                  });
-                }
-              }
-            }
-
-            // Verificar se já não existe na lista (evitar duplicatas)
-            const exists = events.some(e => e.id === eventData.id);
-            if (!exists) {
-              events.push(eventData);
-            }
-          }
-        }
-        console.log(`[EventStats] Encontrados ${historyEvents.length} eventos no banco de dados`);
-      } catch (dbError) {
-        console.error('[EventStats] Erro ao buscar do banco:', dbError);
-      }
-
-      // 3. Também verificar eventos ativos se necessário (opcional)
-      if (global.activeEvents && global.activeEvents.size > 0) {
-        const activeEvents = Array.from(global.activeEvents.values()).filter(event => {
-          const eventDate = event.inicioTimestamp || Date.now();
-          const matchesGuild = event.guildId === guild.id || !event.guildId; // Incluir se não tiver guildId (compatibilidade)
-          const matchesDate = days === 0 ? true : eventDate > since;
-          return matchesGuild && matchesDate;
-        });
-        events = [...events, ...activeEvents];
-        console.log(`[EventStats] Encontrados ${activeEvents.length} eventos ativos`);
-      }
-
-      console.log(`[EventStats] Total de eventos encontrados: ${events.length}`);
-
-      const participacao = new Map();
-      let totalLoot = 0;
-
-      for (const event of events) {
-        // Processar participantes do Map
-        if (event.participantes && event.participantes instanceof Map) {
-          for (const [userId, data] of event.participantes.entries()) {
-            // Se tem filtro de cargo, verifica
-            if (roleFilter) {
-              const member = await guild.members.fetch(userId).catch(() => null);
-              if (!member) continue;
-
-              const hasRole = member.roles.cache.some(r =>
-                r.name.toLowerCase() === roleFilter.toLowerCase()
-              );
-              if (!hasRole) continue;
-            }
-
-            if (!participacao.has(userId)) {
-              participacao.set(userId, {
-                userId,
-                count: 0,
-                loot: 0,
-                tempoTotal: 0,
-                lastEvent: null
-              });
-            }
-
-            const userStats = participacao.get(userId);
-            userStats.count++;
-            // Calcular loot baseado no tempo de participação se disponível
-            const tempoMin = Math.floor((data.tempoTotal || 0) / 1000 / 60);
-            userStats.tempoTotal += tempoMin;
-            totalLoot += data.valor || 0;
-
-            const eventDate = event.finalizadoEm || event.created_at || Date.now();
-            if (!userStats.lastEvent || eventDate > userStats.lastEvent) {
-              userStats.lastEvent = eventDate;
-            }
-          }
-        }
-      }
-
-      // Converte para array e ordena por quantidade de eventos
-      const sorted = Array.from(participacao.values())
-        .sort((a, b) => b.count - a.count);
-
-      return {
-        totalEvents: events.length,
-        totalParticipants: sorted.length,
-        totalLoot: totalLoot,
-        topParticipants: sorted.slice(0, 15),
-        periodDays: days
-      };
-
-    } catch (error) {
-      console.error('[EventStats] Erro buscando estatísticas:', error);
-      return {
-        totalEvents: 0,
-        totalParticipants: 0,
-        totalLoot: 0,
-        topParticipants: [],
-        periodDays: days
-      };
-    }
-  }
-
-  /**
-   * Cria embed moderno
-   */
-  static createModernEmbed(stats, guild, periodDays, roleFilter) {
-    const {
-      totalEvents,
-      totalParticipants,
-      totalLoot,
-      topParticipants
-    } = stats;
-
-    const periodText = this.getPeriodText(periodDays);
-    const roleText = roleFilter || 'Todos';
-
-    let description = `> **Período:** ${periodText}\n`;
-    description += `> **Filtro:** ${roleText}\n`;
-    description += `> **Total de Eventos:** \`${totalEvents}\`\n\n`;
-
-    // Lista de participantes
-    if (topParticipants.length === 0) {
-      description += '*Nenhuma participação registrada neste período*';
-    } else {
-      description += '**🏆 RANKING DE PARTICIPAÇÃO**\n\n';
-
-      topParticipants.forEach((user, index) => {
-        const pos = index + 1;
-        const emoji = pos === 1 ? '🥇' : pos === 2 ? '🥈' : pos === 3 ? '🥉' : `\`${pos}.\``;
-        const percent = totalEvents > 0 ? ((user.count / totalEvents) * 100).toFixed(0) : 0;
-
-        description += `${emoji} <@${user.userId}> — \`${user.count}\` eventos (${percent}%)\n`;
-        if (user.tempoTotal > 0) {
-          description += ` └ Tempo: \`${user.tempoTotal}min\`\n`;
-        }
-        description += '\n';
-      });
-    }
-
-    const embed = new EmbedBuilder()
-      .setTitle('📊 PAINEL DE EVENTOS')
-      .setDescription(description)
-      .setColor(0x9B59B6)
-      .setThumbnail(guild.iconURL({ dynamic: true }) || 'https://i.imgur.com/5K9Q5ZK.png')
-      .addFields(
-        {
-          name: '👥 Participantes Únicos',
-          value: `\`${totalParticipants}\``,
-          inline: true
-        },
-        {
-          name: '💰 Loot Distribuído',
-          value: `\`${this.formatNumber(totalLoot)}\``,
-          inline: true
-        },
-        {
-          name: '📅 Média/Evento',
-          value: totalEvents > 0 ? `\`${(totalParticipants / totalEvents).toFixed(1)}\`` : '`0`',
-          inline: true
-        }
-      )
-      .setFooter({
-        text: 'NOTAG Bot • Sistema de Eventos',
-        iconURL: 'https://i.imgur.com/8QBYRrm.png'
-      })
-      .setTimestamp();
-
-    return embed;
-  }
-
-  /**
-   * Cria componentes interativos
-   */
-  static createComponents() {
-    return [
-      // Select Menu para Período
-      new ActionRowBuilder().addComponents(
-        new StringSelectMenuBuilder()
-          .setCustomId('select_periodo_eventos')
-          .setPlaceholder('📅 Selecione o período...')
-          .addOptions([
-            { label: 'Últimos 7 dias', value: '7', emoji: '📅', description: 'Eventos da última semana' },
-            { label: 'Últimas 2 semanas', value: '14', emoji: '📆', description: 'Eventos dos últimos 14 dias' },
-            { label: 'Último mês', value: '30', emoji: '🗓️', description: 'Eventos dos últimos 30 dias' },
-            { label: 'Últimos 3 meses', value: '90', emoji: '📊', description: 'Eventos dos últimos 3 meses' },
-            { label: 'Últimos 7 meses', value: '210', emoji: '📈', description: 'Eventos dos últimos 7 meses' },
-            { label: 'Último ano', value: '365', emoji: '🎂', description: 'Eventos do último ano' },
-            { label: 'Todo o período', value: '0', emoji: '♾️', description: 'Todos os eventos registrados' }
-          ])
-      ),
-      // Select Menu para Cargo
-      new ActionRowBuilder().addComponents(
-        new StringSelectMenuBuilder()
-          .setCustomId('select_cargo_eventos')
-          .setPlaceholder('👥 Filtrar por cargo...')
-          .addOptions([
-            { label: 'Todos os cargos', value: 'all', emoji: '👥', description: 'Mostrar todos os participantes' },
-            { label: 'Membros', value: 'Membro', emoji: '⚔️', description: 'Apenas membros da guilda' },
-            { label: 'Convidados', value: 'Convidado', emoji: '🎉', description: 'Apenas convidados' },
-            { label: 'Aliança', value: 'Aliança', emoji: '🤝', description: 'Apenas aliados' }
-          ])
-      ),
       // Botões de ação
-      new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId('btn_eventos_atualizar')
-          .setLabel('🔄 Atualizar')
-          .setStyle(ButtonStyle.Success),
-        new ButtonBuilder()
-          .setCustomId('btn_eventos_exportar')
-          .setLabel('📥 Exportar CSV')
-          .setStyle(ButtonStyle.Primary)
-          .setDisabled(true), // Desabilitado até implementar
-        new ButtonBuilder()
-          .setCustomId('btn_eventos_ajuda')
-          .setLabel('❓ Ajuda')
-          .setStyle(ButtonStyle.Secondary)
-      )
-    ];
+      const row = new ActionRowBuilder()
+        .addComponents(
+          new ButtonBuilder()
+            .setCustomId(`reg_approve_member_${registrationData.id}`)
+            .setLabel('Aprovar Membro')
+            .setStyle(ButtonStyle.Success),
+          new ButtonBuilder()
+            .setCustomId(`reg_approve_alliance_${registrationData.id}`)
+            .setLabel('Aprovar Aliança')
+            .setStyle(ButtonStyle.Primary),
+          new ButtonBuilder()
+            .setCustomId(`reg_approve_guest_${registrationData.id}`)
+            .setLabel('Aprovar Convidado')
+            .setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
+            .setCustomId(`reg_reject_${registrationData.id}`)
+            .setLabel('Rejeitar')
+            .setStyle(ButtonStyle.Danger)
+        );
+
+      await channel.send({ embeds: [embed], components: [row] });
+      console.log(`[notifyModerators] Notificação enviada para canal ${modChannelId}`);
+
+    } catch (error) {
+      console.error(`[notifyModerators] Erro ao notificar:`, error);
+    }
   }
 
   /**
-   * Handler para seleção de período
+   * Lista registros pendentes (para painel de moderação)
    */
-  static async handlePeriodSelect(interaction) {
+  async listPendingRegistrations(guildId) {
     try {
-      await interaction.deferUpdate();
+      const registrations = await Database.getPendingRegistrations(guildId);
 
-      const days = parseInt(interaction.values[0]);
-      const guild = interaction.guild;
+      return registrations.map(reg => ({
+        ...reg,
+        createdAtISO: Database.timestampToISO(reg.created_at),
+        updatedAtISO: Database.timestampToISO(reg.updated_at)
+      }));
+    } catch (error) {
+      console.error(`[listPendingRegistrations] Erro:`, error);
+      return [];
+    }
+  }
 
-      // Recupera filtro de cargo atual se existir
-      const currentFilter = this.activeFilters.get(guild.id);
-      const roleFilter = currentFilter?.roleFilter;
+  /**
+   * Cleanup de sessões expiradas (chamar periodicamente)
+   */
+  cleanupExpiredSessions() {
+    const now = this.getTimestamp();
+    let cleaned = 0;
 
-      const stats = await this.getParticipationStats(guild, days === 0 ? 3650 : days, roleFilter);
-      const embed = this.createModernEmbed(stats, guild, days, roleFilter || 'Todos');
+    for (const [userId, data] of this.pendingRegistrations) {
+      if (now > data.expiresAt) {
+        this.pendingRegistrations.delete(userId);
+        cleaned++;
+      }
+    }
+
+    if (cleaned > 0) {
+      console.log(`[RegistrationActions] ${cleaned} sessões expiradas limpas`);
+    }
+  }
+
+  /**
+   * Adiciona usuário à blacklist (integração com sistema global)
+   */
+  async blacklistUser(interaction, userId, reason) {
+    try {
+      await interaction.deferReply({ ephemeral: true });
+
+      const member = interaction.member;
+      if (!member.permissions.has(PermissionFlagsBits.Administrator)) {
+        return interaction.editReply({
+          content: '❌ Apenas administradores podem adicionar à blacklist.',
+          ephemeral: true
+        });
+      }
+
+      const sanitizedReason = this.sanitizeInput(reason, 500);
+      const now = this.getTimestamp();
+
+      // Busca dados do usuário se houver registro
+      const registration = await Database.getUserRegistration(interaction.guild.id, userId);
+
+      await Database.addToBlacklist(userId, {
+        nick: registration?.nick || 'Unknown',
+        guilda: registration?.guild_name || 'Unknown',
+        motivo: sanitizedReason,
+        addedBy: interaction.user.id,
+        guildId: interaction.guild.id
+      });
+
+      // Log de auditoria
+      await Database.logAudit(interaction.guild.id, 'BLACKLIST_ADD', interaction.user.id, {
+        targetUserId: userId,
+        reason: sanitizedReason,
+        timestamp: now
+      });
 
       await interaction.editReply({
-        embeds: [embed],
-        components: this.createComponents()
-      });
-
-      // Atualiza cache
-      this.activeFilters.set(guild.id, {
-        ...currentFilter,
-        periodDays: days,
-        messageId: interaction.message.id,
-        channelId: interaction.channel.id
-      });
-
-      console.log(`[EventStats] Período alterado para ${days}d por ${interaction.user.tag}`);
-
-    } catch (error) {
-      console.error('[EventStats] Erro na seleção de período:', error);
-      await interaction.followUp({
-        content: '❌ Erro ao alterar período.',
+        content: `🚫 Usuário adicionado à blacklist.\n**Motivo:** ${sanitizedReason}`,
         ephemeral: true
       });
-    }
-  }
 
-  /**
-   * Handler para seleção de cargo
-   */
-  static async handleRoleSelect(interaction) {
-    try {
-      await interaction.deferUpdate();
+      console.log(`[blacklistUser] Usuário ${userId} adicionado à blacklist por ${interaction.user.id}`);
 
-      const roleValue = interaction.values[0];
-      const guild = interaction.guild;
-
-      // Recupera período atual
-      const currentFilter = this.activeFilters.get(guild.id);
-      const periodDays = currentFilter?.periodDays || 30;
-
-      const roleFilter = roleValue === 'all' ? null : roleValue;
-
-      const stats = await this.getParticipationStats(guild, periodDays === 0 ? 3650 : periodDays, roleFilter);
-      const embed = this.createModernEmbed(stats, guild, periodDays, roleFilter || 'Todos');
-
+    } catch (error) {
+      console.error(`[blacklistUser] Erro:`, error);
       await interaction.editReply({
-        embeds: [embed],
-        components: this.createComponents()
-      });
-
-      // Atualiza cache
-      this.activeFilters.set(guild.id, {
-        ...currentFilter,
-        roleFilter: roleFilter,
-        messageId: interaction.message.id,
-        channelId: interaction.channel.id
-      });
-
-      console.log(`[EventStats] Filtro de cargo alterado para ${roleFilter} por ${interaction.user.tag}`);
-
-    } catch (error) {
-      console.error('[EventStats] Erro na seleção de cargo:', error);
-      await interaction.followUp({
-        content: '❌ Erro ao filtrar por cargo.',
+        content: `❌ Erro: ${error.message}`,
         ephemeral: true
-      });
+      }).catch(console.error);
     }
   }
 
   /**
-   * Handler para atualização manual
+   * Busca estatísticas de registro do servidor
    */
-  static async handleAtualizar(interaction) {
+  async getRegistrationStats(guildId) {
     try {
-      await interaction.deferUpdate();
+      // Busca no banco (assumindo que Database tem método para isso ou fazemos query raw)
+      // Aqui simulando baseado nos métodos disponíveis no database.js
+      const db = await Database.getGuildDb(guildId);
 
-      const guild = interaction.guild;
-      const currentFilter = this.activeFilters.get(guild.id);
-      const periodDays = currentFilter?.periodDays || 30;
-      const roleFilter = currentFilter?.roleFilter;
+      const stats = await db.allAsync(`
+        SELECT 
+          status,
+          COUNT(*) as count,
+          DATE(created_at/1000, 'unixepoch') as date
+        FROM registrations
+        GROUP BY status, DATE(created_at/1000, 'unixepoch')
+        ORDER BY date DESC
+        LIMIT 30
+      `);
 
-      const stats = await this.getParticipationStats(guild, periodDays === 0 ? 3650 : periodDays, roleFilter);
-      const embed = this.createModernEmbed(stats, guild, periodDays, roleFilter || 'Todos');
-
-      await interaction.editReply({ embeds: [embed], components: this.createComponents() });
-
+      return stats;
     } catch (error) {
-      console.error('[EventStats] Erro na atualização:', error);
-      await interaction.followUp({
-        content: '❌ Erro ao atualizar painel.',
-        ephemeral: true
-      });
+      console.error(`[getRegistrationStats] Erro:`, error);
+      return [];
     }
   }
 
   /**
-   * Converte dias para texto legível
+   * Cleanup de recursos
    */
-  static getPeriodText(days) {
-    if (days === 0 || days >= 3650) return 'Todo o período';
-    if (days === 7) return 'Últimos 7 dias';
-    if (days === 14) return 'Últimas 2 semanas';
-    if (days === 30) return 'Último mês';
-    if (days === 90) return 'Últimos 3 meses';
-    if (days === 210) return 'Últimos 7 meses';
-    if (days === 365) return 'Último ano';
-    return `Últimos ${days} dias`;
-  }
-
-  /**
-   * Formata números
-   */
-  static formatNumber(num) {
-    if (num === undefined || num === null || isNaN(num)) return '0';
-    return num.toLocaleString('pt-BR');
+  cleanup() {
+    console.log('[RegistrationActions] Limpando recursos...');
+    this.pendingRegistrations.clear();
+    this.operationLocks.clear();
   }
 }
 
-module.exports = EventStatsHandler;
+module.exports = new RegistrationActions();
