@@ -12,7 +12,8 @@ const AlbionAPI = require('./albionApi');
 /**
  * Sistema de Killboard - Monitora kills e deaths da guilda
  * Features:
- * - Polling automático a cada 30s
+ * - Polling automático com backoff exponencial (30s -> 60s -> 120s -> 240s -> 480s)
+ * - Detecção de guilda inválida (para após 5 falhas ou guilda não existente)
  * - Imagens de equipamentos via render.albiononline.com
  * - Cálculo de valores via Albion Data Project
  * - Cache anti-duplicados
@@ -24,6 +25,18 @@ class KillboardHandler {
  this.lastEventIds = new Map(); // guildId -> Set(eventIds)
  this.processedEvents = new Map(); // guildId -> Map(eventId -> timestamp)
  this.maxCacheSize = 1000; // Manter últimos 1000 eventos em cache
+
+ // ✅ NOVO: Estatísticas de polling para backoff e controle de falhas
+ this.pollingStats = new Map(); // guildId -> { consecutiveFailures, lastFailureTime, currentInterval, isPaused, invalidGuildDetected }
+
+ // ✅ CONSTANTES DE CONFIGURAÇÃO
+ this.config = {
+ baseInterval: 30000,        // 30 segundos base
+ maxInterval: 300000,        // 5 minutos máximo
+ maxConsecutiveFailures: 5,  // Parar após 5 falhas
+ failureThreshold: 3,        // Verificar se guilda existe após 3 falhas
+ backoffMultiplier: 2        // Multiplicador de backoff
+ };
  }
 
  /**
@@ -68,16 +81,78 @@ class KillboardHandler {
  killboard: killboardConfig
  });
 
- // Iniciar polling se tiver guilda do Albion configurada
+ // ✅ VERIFICAÇÃO CRÍTICA: Validar se guilda existe antes de iniciar polling
  if (killboardConfig.guildIdAlbion) {
+ const guildValid = await this.validateGuildExists(killboardConfig.guildIdAlbion);
+ if (!guildValid) {
+ console.error(`[Killboard] ❌ Guilda Albion ${killboardConfig.guildIdAlbion} não existe! Polling não iniciado.`);
+ // Notificar admin via canal de logs se disponível
+ await this.notifyInvalidGuild(guild, killboardConfig.guildIdAlbion);
+ return killboardConfig;
+ }
+
+ // Iniciar polling com intervalo base
  this.startPolling(guildId, killboardConfig);
  }
 
- console.log(`[Killboard] Inicializado para guild ${guildId}`);
+ console.log(`[Killboard] ✅ Inicializado para guild ${guildId}`);
  return killboardConfig;
  } catch (error) {
- console.error('[Killboard] Erro na inicialização:', error);
+ console.error('[Killboard] ❌ Erro na inicialização:', error);
  throw error;
+ }
+ }
+
+ /**
+ * ✅ NOVO: Valida se a guilda existe na API do Albion
+ */
+ async validateGuildExists(albionGuildId) {
+ try {
+ console.log(`[Killboard] 🔍 Validando existência da guilda ${albionGuildId}...`);
+ const guildInfo = await AlbionAPI.getGuildInfo(albionGuildId);
+ return guildInfo !== null && guildInfo.Id === albionGuildId;
+ } catch (error) {
+ console.error(`[Killboard] ❌ Erro ao validar guilda:`, error);
+ return false;
+ }
+ }
+
+ /**
+ * ✅ NOVO: Notifica admins sobre guilda inválida
+ */
+ async notifyInvalidGuild(guild, invalidGuildId) {
+ try {
+ const adminRole = guild.roles.cache.find(r => r.name === 'ADM');
+ const staffRole = guild.roles.cache.find(r => r.name === 'Staff');
+ const logChannel = guild.channels.cache.find(c => c.name === '📜╠logs-sistema');
+
+ const embed = new EmbedBuilder()
+ .setTitle('⚠️ Killboard - Guilda Inválida')
+ .setDescription(
+ `**Não foi possível iniciar o monitoramento!**\n\n` +
+ `A guilda Albion configurada (**\`${invalidGuildId}\`**) não foi encontrada na API.\n\n` +
+ `**Solução:** Use \`/killboard config [guildIdCorreto]\` para configurar um ID válido.`
+ )
+ .setColor(0xE74C3C)
+ .setTimestamp();
+
+ const mentions = [];
+ if (adminRole) mentions.push(`<@&${adminRole.id}>`);
+ if (staffRole) mentions.push(`<@&${staffRole.id}>`);
+
+ const content = mentions.length > 0 ? mentions.join(' ') : '@everyone';
+
+ if (logChannel) {
+ await logChannel.send({ content, embeds: [embed] });
+ } else {
+ // Tentar enviar no primeiro canal de texto disponível
+ const firstChannel = guild.channels.cache.find(c => c.type === ChannelType.GuildText && c.permissionsFor(guild.members.me).has(PermissionFlagsBits.SendMessages));
+ if (firstChannel) {
+ await firstChannel.send({ content, embeds: [embed] });
+ }
+ }
+ } catch (error) {
+ console.error(`[Killboard] ❌ Erro ao notificar guilda inválida:`, error);
  }
  }
 
@@ -98,10 +173,10 @@ class KillboardHandler {
  }
  ]
  });
- console.log(`[Killboard] Canal de kills criado: ${channel.id}`);
+ console.log(`[Killboard] ✅ Canal de kills criado: ${channel.id}`);
  return channel;
  } catch (error) {
- console.error('[Killboard] Erro ao criar canal de kills:', error);
+ console.error('[Killboard] ❌ Erro ao criar canal de kills:', error);
  throw error;
  }
  }
@@ -123,10 +198,10 @@ class KillboardHandler {
  }
  ]
  });
- console.log(`[Killboard] Canal de deaths criado: ${channel.id}`);
+ console.log(`[Killboard] ✅ Canal de deaths criado: ${channel.id}`);
  return channel;
  } catch (error) {
- console.error('[Killboard] Erro ao criar canal de deaths:', error);
+ console.error('[Killboard] ❌ Erro ao criar canal de deaths:', error);
  throw error;
  }
  }
@@ -136,6 +211,12 @@ class KillboardHandler {
  */
  async setGuildId(guildId, albionGuildId) {
  try {
+ // ✅ VALIDAÇÃO: Verificar se guilda existe antes de configurar
+ const guildValid = await this.validateGuildExists(albionGuildId);
+ if (!guildValid) {
+ throw new Error(`Guilda Albion ${albionGuildId} não existe na API`);
+ }
+
  const config = global.guildConfig?.get(guildId)?.killboard || {};
  config.guildIdAlbion = albionGuildId;
 
@@ -152,36 +233,66 @@ class KillboardHandler {
  killboard: config
  });
 
- // Reiniciar polling
+ // ✅ REINICIAR POLLING com estatísticas limpas
  this.stopPolling(guildId);
+ this.resetPollingStats(guildId);
  this.startPolling(guildId, config);
 
  return guildData;
  } catch (error) {
- console.error('[Killboard] Erro ao configurar guilda:', error);
+ console.error('[Killboard] ❌ Erro ao configurar guilda:', error);
  throw error;
  }
  }
 
  /**
- * Inicia o polling de eventos
+ * ✅ NOVO: Reseta estatísticas de polling
  */
- startPolling(guildId, config) {
- if (this.pollingIntervals.has(guildId)) {
- clearInterval(this.pollingIntervals.get(guildId));
+ resetPollingStats(guildId) {
+ this.pollingStats.set(guildId, {
+ consecutiveFailures: 0,
+ lastFailureTime: null,
+ currentInterval: this.config.baseInterval,
+ isPaused: false,
+ invalidGuildDetected: false,
+ lastSuccessTime: null,
+ totalRequests: 0
+ });
  }
 
- console.log(`[Killboard] Iniciando polling para guild ${guildId}`);
+ /**
+ * ✅ MELHORADO: Inicia o polling com intervalo dinâmico (backoff)
+ */
+ startPolling(guildId, config) {
+ // Limpar intervalo anterior se existir
+ this.stopPolling(guildId);
+
+ // Inicializar estatísticas se não existirem
+ if (!this.pollingStats.has(guildId)) {
+ this.resetPollingStats(guildId);
+ }
+
+ const stats = this.pollingStats.get(guildId);
+ if (stats.isPaused || stats.invalidGuildDetected) {
+ console.log(`[Killboard] ⏸️ Polling pausado ou guilda inválida para ${guildId}`);
+ return;
+ }
+
+ console.log(`[Killboard] ▶️ Iniciando polling para guild ${guildId} (intervalo: ${stats.currentInterval}ms)`);
 
  // Primeira execução imediata
  this.checkNewEvents(guildId, config);
 
- // Polling a cada 30 segundos
- const interval = setInterval(() => {
+ // Configurar intervalo dinâmico
+ const intervalId = setInterval(() => {
+ const currentStats = this.pollingStats.get(guildId);
+ if (!currentStats || currentStats.isPaused || currentStats.invalidGuildDetected) {
+ return;
+ }
  this.checkNewEvents(guildId, config);
- }, 30000);
+ }, stats.currentInterval);
 
- this.pollingIntervals.set(guildId, interval);
+ this.pollingIntervals.set(guildId, intervalId);
  }
 
  /**
@@ -191,12 +302,140 @@ class KillboardHandler {
  if (this.pollingIntervals.has(guildId)) {
  clearInterval(this.pollingIntervals.get(guildId));
  this.pollingIntervals.delete(guildId);
- console.log(`[Killboard] Polling parado para guild ${guildId}`);
+ console.log(`[Killboard] ⏹️ Polling parado para guild ${guildId}`);
  }
  }
 
  /**
- * Verifica novos eventos na API
+ * ✅ MELHORADO: Para polling com erro específico
+ */
+ stopPollingWithError(guildId, reason) {
+ this.stopPolling(guildId);
+ const stats = this.pollingStats.get(guildId);
+ if (stats) {
+ stats.isPaused = true;
+ stats.invalidGuildDetected = reason.includes('inválida') || reason.includes('não existe');
+ }
+ console.error(`[Killboard] 🛑 Polling parado para guild ${guildId}: ${reason}`);
+ }
+
+ /**
+ * ✅ MELHORADO: Atualiza intervalo com backoff exponencial
+ */
+ updatePollingInterval(guildId, success) {
+ const stats = this.pollingStats.get(guildId);
+ if (!stats) return;
+
+ if (success) {
+ // ✅ Sucesso: Resetar para intervalo base
+ if (stats.consecutiveFailures > 0) {
+ console.log(`[Killboard] ✅ Sucesso! Resetando intervalo para ${this.config.baseInterval}ms`);
+ stats.consecutiveFailures = 0;
+ stats.currentInterval = this.config.baseInterval;
+ stats.lastSuccessTime = Date.now();
+ // Reiniciar polling com novo intervalo
+ const config = global.guildConfig?.get(guildId)?.killboard;
+ if (config) {
+ this.startPolling(guildId, config);
+ }
+ }
+ } else {
+ // ❌ Falha: Aumentar contador e aplicar backoff
+ stats.consecutiveFailures++;
+ stats.lastFailureTime = Date.now();
+ stats.totalRequests++;
+
+ // Calcular novo intervalo com backoff exponencial
+ const newInterval = Math.min(
+ this.config.baseInterval * Math.pow(this.config.backoffMultiplier, stats.consecutiveFailures),
+ this.config.maxInterval
+ );
+
+ stats.currentInterval = newInterval;
+ console.warn(`[Killboard] ⚠️ Falha ${stats.consecutiveFailures}/${this.config.maxConsecutiveFailures}. Novo intervalo: ${newInterval}ms`);
+
+ // Verificar se atingiu limite de falhas
+ if (stats.consecutiveFailures >= this.config.maxConsecutiveFailures) {
+ this.stopPollingWithError(guildId, `Máximo de ${this.config.maxConsecutiveFailures} falhas consecutivas atingido`);
+
+ // Notificar admins
+ this.notifyPollingFailure(guildId);
+ return;
+ }
+
+ // Se atingiu threshold de verificação, checar se guilda ainda existe
+ if (stats.consecutiveFailures === this.config.failureThreshold) {
+ this.checkGuildStillExists(guildId);
+ }
+
+ // Reiniciar polling com novo intervalo
+ const config = global.guildConfig?.get(guildId)?.killboard;
+ if (config && !stats.isPaused) {
+ this.startPolling(guildId, config);
+ }
+ }
+ }
+
+ /**
+ * ✅ NOVO: Verifica se guilda ainda existe (após múltiplas falhas)
+ */
+ async checkGuildStillExists(guildId) {
+ const config = global.guildConfig?.get(guildId)?.killboard;
+ if (!config?.guildIdAlbion) return;
+
+ console.log(`[Killboard] 🔍 Verificando se guilda ${config.guildIdAlbion} ainda existe...`);
+ const exists = await this.validateGuildExists(config.guildIdAlbion);
+
+ if (!exists) {
+ console.error(`[Killboard] ❌ Guilda ${config.guildIdAlbion} não existe mais! Parando polling.`);
+ this.stopPollingWithError(guildId, `Guilda Albion inválida ou não existe`);
+
+ const client = global.client;
+ const guild = client.guilds.cache.get(guildId);
+ if (guild) {
+ await this.notifyInvalidGuild(guild, config.guildIdAlbion);
+ }
+ }
+ }
+
+ /**
+ * ✅ NOVO: Notifica admins sobre falha no polling
+ */
+ async notifyPollingFailure(guildId) {
+ try {
+ const client = global.client;
+ const guild = client.guilds.cache.get(guildId);
+ if (!guild) return;
+
+ const logChannel = guild.channels.cache.find(c => c.name === '📜╠logs-sistema') || 
+ guild.channels.cache.find(c => c.type === ChannelType.GuildText);
+
+ if (!logChannel) return;
+
+ const stats = this.pollingStats.get(guildId);
+ const embed = new EmbedBuilder()
+ .setTitle('🚨 Killboard - Falha Crítica')
+ .setDescription(
+ `**O sistema de killboard foi pausado após múltiplas falhas!**\n\n` +
+ `**Falhas consecutivas:** ${stats?.consecutiveFailures || 'Desconhecido'}\n` +
+ `**Última tentativa:** ${stats?.lastFailureTime ? new Date(stats.lastFailureTime).toLocaleString('pt-BR') : 'N/A'}\n\n` +
+ `**Possíveis causas:**\n` +
+ `• API do Albion indisponível\n` +
+ `• ID da guilda incorreto\n` +
+ `• Problemas de conectividade\n\n` +
+ `**Para retomar:** Use \`/killboard restart\` ou reconfigure o sistema.`
+ )
+ .setColor(0xE74C3C)
+ .setTimestamp();
+
+ await logChannel.send({ embeds: [embed] });
+ } catch (error) {
+ console.error(`[Killboard] ❌ Erro ao notificar falha:`, error);
+ }
+ }
+
+ /**
+ * ✅ MELHORADO: Verifica novos eventos na API com tratamento de erro aprimorado
  */
  async checkNewEvents(guildId, config) {
  try {
@@ -204,10 +443,31 @@ class KillboardHandler {
 
  const client = global.client;
  const guild = client.guilds.cache.get(guildId);
- if (!guild) return;
+ if (!guild) {
+ console.warn(`[Killboard] ⚠️ Guild ${guildId} não encontrada no cache`);
+ this.updatePollingInterval(guildId, false);
+ return;
+ }
+
+ // ✅ Incrementar contador de requests
+ const stats = this.pollingStats.get(guildId);
+ if (stats) {
+ stats.totalRequests++;
+ }
 
  // Buscar últimos eventos da guilda
  const events = await this.fetchGuildEvents(config.guildIdAlbion, 50);
+
+ // ✅ Se retornou null (erro crítico) em vez de [] (vazio normal)
+ if (events === null) {
+ console.warn(`[Killboard] ⚠️ fetchGuildEvents retornou null para guild ${guildId}`);
+ this.updatePollingInterval(guildId, false);
+ return;
+ }
+
+ // ✅ Sucesso na requisição (mesmo que vazio)
+ this.updatePollingInterval(guildId, true);
+
  if (!events || events.length === 0) return;
 
  // Inicializar cache se necessário
@@ -217,12 +477,14 @@ class KillboardHandler {
  const guildCache = this.processedEvents.get(guildId);
 
  // Processar cada evento
+ let processedCount = 0;
  for (const event of events) {
  // Verificar se já processamos este evento (últimas 24h)
  if (guildCache.has(event.EventId)) continue;
 
  // Adicionar ao cache
  guildCache.set(event.EventId, Date.now());
+ processedCount++;
 
  // Limpar cache antigo (manter apenas últimos 1000)
  if (guildCache.size > this.maxCacheSize) {
@@ -244,17 +506,24 @@ class KillboardHandler {
  await this.processDeath(guild, event, config);
  }
  }
+
+ if (processedCount > 0) {
+ console.log(`[Killboard] ✅ ${processedCount} novos eventos processados para guild ${guildId}`);
+ }
+
  } catch (error) {
- console.error(`[Killboard] Erro no polling da guild ${guildId}:`, error);
+ console.error(`[Killboard] ❌ Erro no polling da guild ${guildId}:`, error);
+ this.updatePollingInterval(guildId, false);
  }
  }
 
  /**
- * Busca eventos da guilda na API com retry e fallback robusto
+ * ✅ MELHORADO: Busca eventos da guilda com melhor tratamento de erro
+ * Retorna: Array de eventos, [] se vazio, ou null se erro crítico
  */
  async fetchGuildEvents(guildId, limit = 50) {
  const maxAttempts = 3;
- const timeout = 30000; // ⬅️ 30 segundos (era 10s)
+ const timeout = 30000;
 
  // Endpoints para fallback (Europa, Américas, Ásia)
  const endpoints = [
@@ -263,10 +532,13 @@ class KillboardHandler {
  'gameinfo-sgp.albiononline.com'
  ];
 
+ let lastError = null;
+ let emptyResponses = 0;
+
  for (const endpoint of endpoints) {
  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
  try {
- console.log(`[Killboard] Buscando eventos em ${endpoint} (tentativa ${attempt}/${maxAttempts})`);
+ console.log(`[Killboard] 🌐 Buscando eventos em ${endpoint} (tentativa ${attempt}/${maxAttempts})`);
 
  const result = await new Promise((resolve, reject) => {
  const options = {
@@ -287,9 +559,10 @@ class KillboardHandler {
  try {
  if (res.statusCode === 200) {
  const json = JSON.parse(data);
- resolve({ success: true, data: json });
+ resolve({ success: true, data: json, empty: !json || json.length === 0 });
  } else if (res.statusCode === 404) {
- resolve({ success: true, data: [] });
+ // ✅ Guilda não encontrada - erro crítico
+ resolve({ success: false, notFound: true, status: 404 });
  } else if (res.statusCode === 429) {
  reject({ type: 'RATE_LIMIT', status: res.statusCode });
  } else {
@@ -314,15 +587,32 @@ class KillboardHandler {
  });
 
  if (result.success) {
+ if (result.empty) {
+ emptyResponses++;
+ if (emptyResponses >= endpoints.length) {
+ // Todos endpoints retornaram vazio - guilda pode existir mas sem eventos
+ console.log(`[Killboard] ℹ️ Guilda ${guildId} existe mas sem eventos recentes`);
+ return [];
+ }
+ continue; // Tentar próximo endpoint
+ }
+
  if (endpoint !== endpoints[0]) {
  console.log(`[Killboard] ✅ Sucesso usando endpoint alternativo: ${endpoint}`);
  }
  return result.data;
  }
 
+ // ✅ DETECÇÃO DE GUILDA INVÁLIDA (404)
+ if (result.notFound) {
+ console.error(`[Killboard] ❌ Guilda ${guildId} retornou 404 em ${endpoint}`);
+ return null; // Retorna null para indicar erro crítico
+ }
+
  } catch (error) {
  const errorMsg = error.type || error.message || 'Erro desconhecido';
  console.error(`[Killboard] ❌ Falha em ${endpoint} (tentativa ${attempt}): ${errorMsg}`);
+ lastError = error;
 
  // Se for rate limit, espera mais
  if (error.type === 'RATE_LIMIT') {
@@ -332,7 +622,7 @@ class KillboardHandler {
 
  // Se não for última tentativa, aguarda com backoff exponencial
  if (attempt < maxAttempts) {
- const backoff = 2000 * Math.pow(2, attempt - 1); // 2s, 4s
+ const backoff = 2000 * Math.pow(2, attempt - 1);
  console.log(`[Killboard] ⏳ Aguardando ${backoff}ms antes de retry...`);
  await this.delay(backoff);
  }
@@ -344,7 +634,7 @@ class KillboardHandler {
 
  // Todas as tentativas em todos os endpoints falharam
  console.error(`[Killboard] 🔴 Todos os endpoints falharam para guilda ${guildId}`);
- return []; // Retorna vazio para não quebrar o polling
+ return null; // Retorna null para indicar erro crítico (diferente de [] vazio)
  }
 
  /**
@@ -366,9 +656,9 @@ class KillboardHandler {
  const components = this.createEventComponents(event);
 
  await channel.send({ embeds: [embed], components });
- console.log(`[Killboard] Kill processado: ${event.EventId}`);
+ console.log(`[Killboard] 💀 Kill processado: ${event.EventId}`);
  } catch (error) {
- console.error('[Killboard] Erro ao processar kill:', error);
+ console.error('[Killboard] ❌ Erro ao processar kill:', error);
  }
  }
 
@@ -384,9 +674,9 @@ class KillboardHandler {
  const components = this.createEventComponents(event);
 
  await channel.send({ embeds: [embed], components });
- console.log(`[Killboard] Death processado: ${event.EventId}`);
+ console.log(`[Killboard] ☠️ Death processado: ${event.EventId}`);
  } catch (error) {
- console.error('[Killboard] Erro ao processar death:', error);
+ console.error('[Killboard] ❌ Erro ao processar death:', error);
  }
  }
 
@@ -408,7 +698,6 @@ class KillboardHandler {
  .setDescription(`**${killer.Name}** matou **${victim.Name}**`)
  .setColor(0x2ECC71) // Verde
  .setThumbnail(this.getItemImageUrl(killer.Equipment?.MainHand?.Type, killer.Equipment?.MainHand?.Quality))
- .setImage('https://media.discordapp.net/attachments/881536030156480552/123456789/kill_banner.png') // Opcional: banner decorativo
  .setTimestamp(new Date(event.TimeStamp))
  .setFooter({ text: `Event ID: ${event.EventId} • Albion Killboard` });
 
@@ -589,9 +878,6 @@ class KillboardHandler {
  const quality = this.getQualityStars(item.Quality);
  const itemValue = showValues ? `(${this.formatSilver(this.getItemValue(item))})` : '';
 
- // Link para imagem do item
- const itemImage = this.getItemImageUrl(item.Type, item.Quality);
-
  lines.push(`${slot.icon} **${slot.name}:** ${tier}${enchant} ${quality} ${itemValue}`);
  } else if (highlightLost) {
  lines.push(`${slot.icon} **${slot.name}:** ❌ *Vazio*`);
@@ -663,7 +949,6 @@ class KillboardHandler {
 
  /**
  * Estima valor de um item baseado no tier/quality
- * (Simplificado - em produção, consultar API de preços)
  */
  getItemValue(item) {
  if (!item || !item.Type) return 0;
@@ -747,6 +1032,43 @@ class KillboardHandler {
  }
 
  /**
+ * ✅ NOVO: Retorna estatísticas de polling (para comando de status)
+ */
+ getPollingStats(guildId) {
+ const stats = this.pollingStats.get(guildId);
+ if (!stats) return null;
+
+ return {
+ ...stats,
+ isRunning: this.pollingIntervals.has(guildId),
+ nextCheckIn: stats.isPaused ? null : new Date(Date.now() + stats.currentInterval).toISOString()
+ };
+ }
+
+ /**
+ * ✅ NOVO: Força reinício do polling (para comando admin)
+ */
+ async restartPolling(guildId) {
+ const config = global.guildConfig?.get(guildId)?.killboard;
+ if (!config) return false;
+
+ console.log(`[Killboard] 🔄 Reiniciando polling manualmente para guild ${guildId}`);
+ this.resetPollingStats(guildId);
+ this.stopPolling(guildId);
+
+ // Revalidar guilda
+ if (config.guildIdAlbion) {
+ const valid = await this.validateGuildExists(config.guildIdAlbion);
+ if (!valid) {
+ throw new Error(`Guilda ${config.guildIdAlbion} não existe`);
+ }
+ }
+
+ this.startPolling(guildId, config);
+ return true;
+ }
+
+ /**
  * Envia painel de configuração do killboard
  */
  async sendConfigPanel(channel) {
@@ -758,7 +1080,8 @@ class KillboardHandler {
  '• 💀-kill-feed - Kills da guilda\n' +
  '• ☠️-death-feed - Mortes da guilda\n\n' +
  '**Features:**\n' +
- '✅ Atualização automática a cada 30s\n' +
+ '✅ Atualização automática (com backoff inteligente)\n' +
+ '✅ Detecção de guilda inválida\n' +
  '✅ Imagens de equipamentos\n' +
  '✅ Cálculo de valores\n' +
  '✅ Fama PvP\n' +
@@ -766,7 +1089,8 @@ class KillboardHandler {
  '**Comandos:**\n' +
  '`/killboard config [guildId]` - Configurar guilda\n' +
  '`/killboard toggle` - Ativar/Desativar\n' +
- '`/killboard test` - Testar envio'
+ '`/killboard status` - Ver status do sistema\n' +
+ '`/killboard restart` - Reiniciar polling'
  )
  .setColor(0x9B59B6);
 
