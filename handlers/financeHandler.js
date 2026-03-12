@@ -9,40 +9,18 @@ const {
 } = require('discord.js');
 const Database = require('../utils/database');
 
+/**
+ * Handler Financeiro - Versão Multi-Servidor
+ * Gerencia saques, empréstimos e transferências
+ */
 class FinanceHandler {
-  constructor() {
-    this.pendingWithdrawals = new Map();
-    this.pendingLoans = new Map();
-    this.pendingTransfers = new Map();
-  }
 
-  static formatSafeNumber(value) {
-    if (value === undefined || value === null || isNaN(value)) {
-      return '0';
-    }
-    return value.toLocaleString();
-  }
-
-  // ========== Saque ==========
-  static createWithdrawModal() {
-    const modal = new ModalBuilder()
-      .setCustomId('modal_sacar_saldo')
-      .setTitle('💸 Solicitar Saque');
-
-    const valorInput = new TextInputBuilder()
-      .setCustomId('valor_saque')
-      .setLabel('Valor que deseja sacar (em pratas)')
-      .setPlaceholder('Ex: 1000000 para 1M')
-      .setStyle(TextInputStyle.Short)
-      .setRequired(true)
-      .setMaxLength(12);
-
-    modal.addComponents(new ActionRowBuilder().addComponents(valorInput));
-    return modal;
-  }
+  // ==================== SAQUE ====================
 
   static async processWithdrawRequest(interaction) {
     try {
+      const guildId = interaction.guild.id;
+      const userId = interaction.user.id;
       const valorInput = interaction.fields.getTextInputValue('valor_saque').trim();
       const valorLimpo = valorInput.replace(/\./g, '').replace(/,/g, '');
       const valor = parseInt(valorLimpo);
@@ -54,7 +32,7 @@ class FinanceHandler {
         });
       }
 
-      const user = await Database.getUser(interaction.user.id);
+      const user = await Database.getUser(guildId, userId);
 
       if (!user || user.saldo === undefined) {
         return interaction.reply({
@@ -65,15 +43,16 @@ class FinanceHandler {
 
       if (user.saldo < valor) {
         return interaction.reply({
-          content: `❌ Saldo insuficiente! Você tem \`${this.formatSafeNumber(user.saldo)}\` mas tentou sacar \`${this.formatSafeNumber(valor)}\`.`,
+          content: `❌ Saldo insuficiente! Você tem \`${valor.toLocaleString()}\` mas tentou sacar \`${valor.toLocaleString()}\`.`,
           ephemeral: true
         });
       }
 
-      const withdrawalId = `wd_${Date.now()}_${interaction.user.id}`;
+      const withdrawalId = `wd_${Date.now()}_${userId}`;
       const withdrawalData = {
         id: withdrawalId,
-        userId: interaction.user.id,
+        guildId: guildId,
+        userId: userId,
         userTag: interaction.user.tag,
         valor: valor,
         saldoAtual: user.saldo,
@@ -84,7 +63,7 @@ class FinanceHandler {
       if (!global.pendingWithdrawals) global.pendingWithdrawals = new Map();
       global.pendingWithdrawals.set(withdrawalId, withdrawalData);
 
-      console.log(`[Finance] Withdrawal request ${withdrawalId} created by ${interaction.user.id} for ${valor}`);
+      console.log(`[Finance] Withdrawal request ${withdrawalId} created by ${userId} for ${valor} (Guild: ${guildId})`);
 
       const canalFinanceiro = interaction.guild.channels.cache.find(c => c.name === '📊╠financeiro');
       if (!canalFinanceiro) {
@@ -97,10 +76,11 @@ class FinanceHandler {
       const embed = new EmbedBuilder()
         .setTitle('💸 SOLICITAÇÃO DE SAQUE')
         .setDescription(
-          `**Jogador:** <@${interaction.user.id}> (${interaction.user.tag})\n` +
-          `**Valor Solicitado:** \`${this.formatSafeNumber(valor)}\`\n` +
-          `**Saldo Atual:** \`${this.formatSafeNumber(user.saldo)}\`\n` +
-          `**Saldo Após Saque:** \`${this.formatSafeNumber(user.saldo - valor)}\``
+          `**Jogador:** <@${userId}> (${interaction.user.tag})\n` +
+          `**Valor Solicitado:** \`${valor.toLocaleString()}\`\n` +
+          `**Saldo Atual:** \`${user.saldo.toLocaleString()}\`\n` +
+          `**Saldo Após Saque:** \`${(user.saldo - valor).toLocaleString()}\`\n` +
+          `**Servidor:** ${interaction.guild.name}`
         )
         .setColor(0xE74C3C)
         .setTimestamp();
@@ -133,7 +113,7 @@ class FinanceHandler {
       });
 
       await interaction.reply({
-        content: `✅ Solicitação de saque de \`${this.formatSafeNumber(valor)}\` enviada para análise! Aguarde aprovação.`,
+        content: `✅ Solicitação de saque de \`${valor.toLocaleString()}\` enviada para análise! Aguarde aprovação.`,
         ephemeral: true
       });
 
@@ -158,6 +138,16 @@ class FinanceHandler {
         });
       }
 
+      const guildId = interaction.guild.id;
+
+      // Verificar se é do mesmo servidor
+      if (withdrawal.guildId && withdrawal.guildId !== guildId) {
+        return interaction.reply({
+          content: '❌ Esta solicitação é de outro servidor!',
+          ephemeral: true
+        });
+      }
+
       const isADM = interaction.member.roles.cache.some(r => r.name === 'ADM');
       const isStaff = interaction.member.roles.cache.some(r => r.name === 'Staff');
       const isTesoureiro = interaction.member.roles.cache.some(r => r.name === 'tesoureiro');
@@ -169,7 +159,7 @@ class FinanceHandler {
         });
       }
 
-      await Database.removeSaldo(withdrawal.userId, withdrawal.valor, 'saque_aprovado');
+      await Database.removeSaldo(guildId, withdrawal.userId, withdrawal.valor, 'saque_aprovado');
 
       withdrawal.status = 'aprovado';
       withdrawal.aprovadoPor = interaction.user.id;
@@ -177,22 +167,21 @@ class FinanceHandler {
 
       try {
         const user = await interaction.client.users.fetch(withdrawal.userId);
-        const userData = await Database.getUser(withdrawal.userId);
+        const userData = await Database.getUser(guildId, withdrawal.userId);
         const novoSaldo = userData?.saldo || 0;
 
         const embed = new EmbedBuilder()
           .setTitle('✅ SAQUE APROVADO')
           .setDescription(
             `💰 **Transação Concluída com Sucesso!**\n\n` +
-            `\> **Valor Sacado:** \`${this.formatSafeNumber(withdrawal.valor)}\`\n` +
-            `\> **Aprovado por:** \`${interaction.user.tag}\`\n` +
-            `\> **Data:** ${new Date().toLocaleString('pt-BR')}\n\n` +
-            `💳 **Novo Saldo:** \`${this.formatSafeNumber(novoSaldo)}\``
+            `> **Valor Sacado:** \`${withdrawal.valor.toLocaleString()}\`\n` +
+            `> **Aprovado por:** \`${interaction.user.tag}\`\n` +
+            `> **Data:** ${new Date().toLocaleString('pt-BR')}\n` +
+            `> **Servidor:** ${interaction.guild.name}\n\n` +
+            `💳 **Novo Saldo:** \`${novoSaldo.toLocaleString()}\``
           )
           .setColor(0x2ECC71)
-          .setFooter({
-            text: 'NOTAG Bot • Sistema Financeiro'
-          })
+          .setFooter({ text: 'NOTAG Bot • Sistema Financeiro' })
           .setTimestamp();
 
         await user.send({ embeds: [embed] });
@@ -201,7 +190,7 @@ class FinanceHandler {
       }
 
       await interaction.update({
-        content: `✅ Saque de \`${this.formatSafeNumber(withdrawal.valor)}\` aprovado para ${withdrawal.userTag}!`,
+        content: `✅ Saque de \`${withdrawal.valor.toLocaleString()}\` aprovado para ${withdrawal.userTag}!`,
         components: []
       });
 
@@ -213,8 +202,9 @@ class FinanceHandler {
               .setTitle('📝 LOG: SAQUE APROVADO')
               .setDescription(
                 `**Jogador:** <@${withdrawal.userId}>\n` +
-                `**Valor:** \`${this.formatSafeNumber(withdrawal.valor)}\`\n` +
-                `**Aprovado por:** <@${interaction.user.id}>`
+                `**Valor:** \`${withdrawal.valor.toLocaleString()}\`\n` +
+                `**Aprovado por:** <@${interaction.user.id}>\n` +
+                `**Servidor:** ${interaction.guild.name}`
               )
               .setColor(0x2ECC71)
               .setTimestamp()
@@ -239,6 +229,14 @@ class FinanceHandler {
       if (!withdrawal) {
         return interaction.reply({
           content: '❌ Solicitação não encontrada!',
+          ephemeral: true
+        });
+      }
+
+      // Verificar se é do mesmo servidor
+      if (withdrawal.guildId && withdrawal.guildId !== interaction.guild.id) {
+        return interaction.reply({
+          content: '❌ Esta solicitação é de outro servidor!',
           ephemeral: true
         });
       }
@@ -278,6 +276,8 @@ class FinanceHandler {
         });
       }
 
+      const guildId = interaction.guild.id;
+
       withdrawal.status = 'recusado';
       withdrawal.motivoRecusa = motivo;
       withdrawal.recusadoPor = interaction.user.id;
@@ -289,15 +289,14 @@ class FinanceHandler {
           .setTitle('❌ SAQUE RECUSADO')
           .setDescription(
             `⚠️ **Sua solicitação de saque foi recusada.**\n\n` +
-            `\> **Valor Solicitado:** \`${this.formatSafeNumber(withdrawal.valor)}\`\n` +
-            `\> **Motivo:** \`\`\`${motivo}\`\`\`\n` +
-            `\> **Recusado por:** \`${interaction.user.tag}\`\n\n` +
+            `> **Valor Solicitado:** \`${withdrawal.valor.toLocaleString()}\`\n` +
+            `> **Motivo:** \`\`\`${motivo}\`\`\`\n` +
+            `> **Recusado por:** \`${interaction.user.tag}\`\n` +
+            `> **Servidor:** ${interaction.guild.name}\n\n` +
             `💡 *Se você tiver dúvidas, entre em contato com um administrador.*`
           )
           .setColor(0xE74C3C)
-          .setFooter({
-            text: 'NOTAG Bot • Sistema Financeiro'
-          })
+          .setFooter({ text: 'NOTAG Bot • Sistema Financeiro' })
           .setTimestamp();
 
         await user.send({ embeds: [embed] });
@@ -328,26 +327,12 @@ class FinanceHandler {
     }
   }
 
-  // ========== Empréstimo ==========
-  static createLoanModal() {
-    const modal = new ModalBuilder()
-      .setCustomId('modal_solicitar_emprestimo')
-      .setTitle('💳 Solicitar Empréstimo');
-
-    const valorInput = new TextInputBuilder()
-      .setCustomId('valor_emprestimo')
-      .setLabel('Valor que deseja pegar emprestado (em pratas)')
-      .setPlaceholder('Ex: 1000000 para 1M')
-      .setStyle(TextInputStyle.Short)
-      .setRequired(true)
-      .setMaxLength(12);
-
-    modal.addComponents(new ActionRowBuilder().addComponents(valorInput));
-    return modal;
-  }
+  // ==================== EMPRÉSTIMO ====================
 
   static async processLoanRequest(interaction) {
     try {
+      const guildId = interaction.guild.id;
+      const userId = interaction.user.id;
       const valorInput = interaction.fields.getTextInputValue('valor_emprestimo').trim();
       const valorLimpo = valorInput.replace(/\./g, '').replace(/,/g, '');
       const valor = parseInt(valorLimpo);
@@ -359,10 +344,11 @@ class FinanceHandler {
         });
       }
 
-      const loanId = `loan_${Date.now()}_${interaction.user.id}`;
+      const loanId = `loan_${Date.now()}_${userId}`;
       const loanData = {
         id: loanId,
-        userId: interaction.user.id,
+        guildId: guildId,
+        userId: userId,
         userTag: interaction.user.tag,
         valor: valor,
         status: 'pendente',
@@ -372,7 +358,7 @@ class FinanceHandler {
       if (!global.pendingLoans) global.pendingLoans = new Map();
       global.pendingLoans.set(loanId, loanData);
 
-      console.log(`[Finance] Loan request ${loanId} created by ${interaction.user.id} for ${valor}`);
+      console.log(`[Finance] Loan request ${loanId} created by ${userId} for ${valor} (Guild: ${guildId})`);
 
       const canalFinanceiro = interaction.guild.channels.cache.find(c => c.name === '📊╠financeiro');
       if (!canalFinanceiro) {
@@ -385,8 +371,9 @@ class FinanceHandler {
       const embed = new EmbedBuilder()
         .setTitle('💳 SOLICITAÇÃO DE EMPRÉSTIMO')
         .setDescription(
-          `**Jogador:** <@${interaction.user.id}> (${interaction.user.tag})\n` +
-          `**Valor Solicitado:** \`${this.formatSafeNumber(valor)}\``
+          `**Jogador:** <@${userId}> (${interaction.user.tag})\n` +
+          `**Valor Solicitado:** \`${valor.toLocaleString()}\`\n` +
+          `**Servidor:** ${interaction.guild.name}`
         )
         .setColor(0x3498DB)
         .setTimestamp();
@@ -419,7 +406,7 @@ class FinanceHandler {
       });
 
       await interaction.reply({
-        content: `✅ Solicitação de empréstimo de \`${this.formatSafeNumber(valor)}\` enviada para análise!`,
+        content: `✅ Solicitação de empréstimo de \`${valor.toLocaleString()}\` enviada para análise!`,
         ephemeral: true
       });
 
@@ -444,6 +431,16 @@ class FinanceHandler {
         });
       }
 
+      const guildId = interaction.guild.id;
+
+      // Verificar se é do mesmo servidor
+      if (loan.guildId && loan.guildId !== guildId) {
+        return interaction.reply({
+          content: '❌ Esta solicitação é de outro servidor!',
+          ephemeral: true
+        });
+      }
+
       const isADM = interaction.member.roles.cache.some(r => r.name === 'ADM');
       const isStaff = interaction.member.roles.cache.some(r => r.name === 'Staff');
       const isTesoureiro = interaction.member.roles.cache.some(r => r.name === 'tesoureiro');
@@ -455,10 +452,10 @@ class FinanceHandler {
         });
       }
 
-      await Database.addSaldo(loan.userId, loan.valor, 'emprestimo_aprovado');
-      const user = await Database.getUser(loan.userId);
+      await Database.addSaldo(guildId, loan.userId, loan.valor, 'emprestimo_aprovado');
+      const user = await Database.getUser(guildId, loan.userId);
       const novaDivida = (user.emprestimosPendentes || 0) + loan.valor;
-      await Database.updateUser(loan.userId, { emprestimos_pendentes: novaDivida });
+      await Database.updateUser(guildId, loan.userId, { emprestimos_pendentes: novaDivida });
 
       loan.status = 'aprovado';
       loan.aprovadoPor = interaction.user.id;
@@ -466,7 +463,7 @@ class FinanceHandler {
 
       try {
         const user = await interaction.client.users.fetch(loan.userId);
-        const userData = await Database.getUser(loan.userId);
+        const userData = await Database.getUser(guildId, loan.userId);
         const novoSaldo = userData?.saldo || 0;
         const dividaTotal = userData?.emprestimosPendentes || loan.valor;
 
@@ -474,17 +471,16 @@ class FinanceHandler {
           .setTitle('✅ EMPRÉSTIMO APROVADO')
           .setDescription(
             `💳 **Crédito Liberado!**\n\n` +
-            `\> **Valor do Empréstimo:** \`${this.formatSafeNumber(loan.valor)}\`\n` +
-            `\> **Aprovado por:** \`${interaction.user.tag}\`\n` +
-            `\> **Data:** ${new Date().toLocaleString('pt-BR')}\n\n` +
-            `💰 **Novo Saldo:** \`${this.formatSafeNumber(novoSaldo)}\`\n` +
-            `📊 **Dívida Total:** \`${this.formatSafeNumber(dividaTotal)}\`\n\n` +
+            `> **Valor do Empréstimo:** \`${loan.valor.toLocaleString()}\`\n` +
+            `> **Aprovado por:** \`${interaction.user.tag}\`\n` +
+            `> **Data:** ${new Date().toLocaleString('pt-BR')}\n` +
+            `> **Servidor:** ${interaction.guild.name}\n\n` +
+            `💰 **Novo Saldo:** \`${novoSaldo.toLocaleString()}\`\n` +
+            `📊 **Dívida Total:** \`${dividaTotal.toLocaleString()}\`\n\n` +
             `⚠️ *Lembre-se de quitar seu empréstimo assim que possível!*`
           )
           .setColor(0x3498DB)
-          .setFooter({
-            text: 'NOTAG Bot • Sistema Financeiro'
-          })
+          .setFooter({ text: 'NOTAG Bot • Sistema Financeiro' })
           .setTimestamp();
 
         await user.send({ embeds: [embed] });
@@ -493,7 +489,7 @@ class FinanceHandler {
       }
 
       await interaction.update({
-        content: `✅ Empréstimo de \`${this.formatSafeNumber(loan.valor)}\` aprovado para ${loan.userTag}!`,
+        content: `✅ Empréstimo de \`${loan.valor.toLocaleString()}\` aprovado para ${loan.userTag}!`,
         components: []
       });
 
@@ -505,8 +501,9 @@ class FinanceHandler {
               .setTitle('📝 LOG: EMPRÉSTIMO APROVADO')
               .setDescription(
                 `**Jogador:** <@${loan.userId}>\n` +
-                `**Valor:** \`${this.formatSafeNumber(loan.valor)}\`\n` +
-                `**Aprovado por:** <@${interaction.user.id}>`
+                `**Valor:** \`${loan.valor.toLocaleString()}\`\n` +
+                `**Aprovado por:** <@${interaction.user.id}>\n` +
+                `**Servidor:** ${interaction.guild.name}`
               )
               .setColor(0x3498DB)
               .setTimestamp()
@@ -535,6 +532,14 @@ class FinanceHandler {
         });
       }
 
+      // Verificar se é do mesmo servidor
+      if (loan.guildId && loan.guildId !== interaction.guild.id) {
+        return interaction.reply({
+          content: '❌ Esta solicitação é de outro servidor!',
+          ephemeral: true
+        });
+      }
+
       const isADM = interaction.member.roles.cache.some(r => r.name === 'ADM');
       const isStaff = interaction.member.roles.cache.some(r => r.name === 'Staff');
       const isTesoureiro = interaction.member.roles.cache.some(r => r.name === 'tesoureiro');
@@ -556,14 +561,13 @@ class FinanceHandler {
           .setTitle('❌ EMPRÉSTIMO RECUSADO')
           .setDescription(
             `⚠️ **Sua solicitação de empréstimo foi recusada.**\n\n` +
-            `\> **Valor Solicitado:** \`${this.formatSafeNumber(loan.valor)}\`\n` +
-            `\> **Recusado por:** \`${interaction.user.tag}\`\n\n` +
+            `> **Valor Solicitado:** \`${loan.valor.toLocaleString()}\`\n` +
+            `> **Recusado por:** \`${interaction.user.tag}\`\n` +
+            `> **Servidor:** ${interaction.guild.name}\n\n` +
             `💡 *Entre em contato com a administração para mais informações.*`
           )
           .setColor(0xE74C3C)
-          .setFooter({
-            text: 'NOTAG Bot • Sistema Financeiro'
-          })
+          .setFooter({ text: 'NOTAG Bot • Sistema Financeiro' })
           .setTimestamp();
 
         await user.send({ embeds: [embed] });
@@ -585,50 +589,14 @@ class FinanceHandler {
     }
   }
 
-  // ========== Transferência (ATUALIZADO COM COMENTÁRIO) ==========
-  static createTransferModal() {
-    const modal = new ModalBuilder()
-      .setCustomId('modal_transferir_saldo')
-      .setTitle('🔄 Transferir Saldo');
-
-    const usuarioInput = new TextInputBuilder()
-      .setCustomId('id_usuario')
-      .setLabel('ID do usuário destino')
-      .setPlaceholder('Ex: 123456789012345678')
-      .setStyle(TextInputStyle.Short)
-      .setRequired(true)
-      .setMaxLength(20);
-
-    const valorInput = new TextInputBuilder()
-      .setCustomId('valor_transferencia')
-      .setLabel('Valor a transferir (em pratas)')
-      .setPlaceholder('Ex: 500000 para 500k')
-      .setStyle(TextInputStyle.Short)
-      .setRequired(true)
-      .setMaxLength(12);
-
-    // ✅ NOVO: Campo de comentário/motivo
-    const comentarioInput = new TextInputBuilder()
-      .setCustomId('comentario_transferencia')
-      .setLabel('Motivo/Comentário (opcional)')
-      .setPlaceholder('Ex: Pagamento por craft, Reembolso de reparo, etc...')
-      .setStyle(TextInputStyle.Paragraph)
-      .setRequired(false)
-      .setMaxLength(500);
-
-    modal.addComponents(
-      new ActionRowBuilder().addComponents(usuarioInput),
-      new ActionRowBuilder().addComponents(valorInput),
-      new ActionRowBuilder().addComponents(comentarioInput) // ✅ Adicionado
-    );
-    return modal;
-  }
+  // ==================== TRANSFERÊNCIA ====================
 
   static async processTransferRequest(interaction) {
     try {
+      const guildId = interaction.guild.id;
+      const userId = interaction.user.id;
       const userIdDestino = interaction.fields.getTextInputValue('id_usuario').trim();
       const valorInput = interaction.fields.getTextInputValue('valor_transferencia').trim();
-      // ✅ NOVO: Pegar o comentário do modal
       const comentario = interaction.fields.getTextInputValue('comentario_transferencia')?.trim() || 'Sem motivo especificado';
 
       const valorLimpo = valorInput.replace(/\./g, '').replace(/,/g, '');
@@ -648,14 +616,14 @@ class FinanceHandler {
         });
       }
 
-      if (userIdDestino === interaction.user.id) {
+      if (userIdDestino === userId) {
         return interaction.reply({
           content: '❌ Você não pode transferir para si mesmo!',
           ephemeral: true
         });
       }
 
-      const userOrigem = await Database.getUser(interaction.user.id);
+      const userOrigem = await Database.getUser(guildId, userId);
       if (!userOrigem || userOrigem.saldo === undefined) {
         return interaction.reply({
           content: '❌ Erro ao consultar seu saldo. Tente novamente mais tarde.',
@@ -665,7 +633,7 @@ class FinanceHandler {
 
       if (userOrigem.saldo < valor) {
         return interaction.reply({
-          content: `❌ Saldo insuficiente! Você tem \`${this.formatSafeNumber(userOrigem.saldo)}\`.`,
+          content: `❌ Saldo insuficiente! Você tem \`${userOrigem.saldo.toLocaleString()}\`.`,
           ephemeral: true
         });
       }
@@ -681,15 +649,16 @@ class FinanceHandler {
         });
       }
 
-      const transferId = `transf_${Date.now()}_${interaction.user.id}`;
+      const transferId = `transf_${Date.now()}_${userId}`;
       const transferData = {
         id: transferId,
-        fromId: interaction.user.id,
+        guildId: guildId,
+        fromId: userId,
         fromTag: interaction.user.tag,
         toId: userIdDestino,
         toTag: destinoTag,
         valor: valor,
-        comentario: comentario, // ✅ NOVO: Salvar o comentário
+        comentario: comentario,
         status: 'pendente',
         timestamp: Date.now()
       };
@@ -697,9 +666,9 @@ class FinanceHandler {
       if (!global.pendingTransfers) global.pendingTransfers = new Map();
       global.pendingTransfers.set(transferId, transferData);
 
-      console.log(`[Finance] Transfer request ${transferId} from ${interaction.user.id} to ${userIdDestino} - Motivo: ${comentario}`);
+      console.log(`[Finance] Transfer request ${transferId} from ${userId} to ${userIdDestino} (Guild: ${guildId})`);
 
-      // DM - Solicitação de Transferência (para destino) COM COMENTÁRIO
+      // DM para destino
       try {
         const destinoUser = await interaction.client.users.fetch(userIdDestino);
 
@@ -707,15 +676,13 @@ class FinanceHandler {
           .setTitle('🔄 SOLICITAÇÃO DE TRANSFERÊNCIA')
           .setDescription(
             `💸 **Você recebeu uma proposta de transferência!**\n\n` +
-            `\> **De:** \`${interaction.user.tag}\`\n` +
-            `\> **Valor:** \`${this.formatSafeNumber(valor)}\`\n` +
-            `\> **Motivo:** \`\`\`${comentario}\`\`\`\n\n` + // ✅ Mostrar o comentário
+            `> **De:** \`${interaction.user.tag}\`\n` +
+            `> **Valor:** \`${valor.toLocaleString()}\`\n` +
+            `> **Motivo:** \`\`\`${comentario}\`\`\`\n\n` +
             `🤔 *Aceitar ou recusar esta transferência?*`
           )
           .setColor(0xF1C40F)
-          .setFooter({
-            text: 'NOTAG Bot • Sistema Financeiro'
-          })
+          .setFooter({ text: 'NOTAG Bot • Sistema Financeiro' })
           .setTimestamp();
 
         const botoes = new ActionRowBuilder()
@@ -776,7 +743,9 @@ class FinanceHandler {
         });
       }
 
-      const userOrigem = await Database.getUser(transfer.fromId);
+      const guildId = transfer.guildId;
+
+      const userOrigem = await Database.getUser(guildId, transfer.fromId);
       if (!userOrigem || userOrigem.saldo < transfer.valor) {
         return interaction.reply({
           content: '❌ O remetente não possui saldo suficiente mais!',
@@ -784,13 +753,13 @@ class FinanceHandler {
         });
       }
 
-      await Database.removeSaldo(transfer.fromId, transfer.valor, 'transferencia_enviada');
-      await Database.addSaldo(transfer.toId, transfer.valor, 'transferencia_recebida');
+      await Database.removeSaldo(guildId, transfer.fromId, transfer.valor, 'transferencia_enviada');
+      await Database.addSaldo(guildId, transfer.toId, transfer.valor, 'transferencia_recebida');
 
       transfer.status = 'concluida';
       transfer.dataAceite = Date.now();
 
-      // DM - Transferência Aceita (para origem) COM COMENTÁRIO
+      // DM para origem
       try {
         const origemUser = await interaction.client.users.fetch(transfer.fromId);
 
@@ -798,16 +767,14 @@ class FinanceHandler {
           .setTitle('✅ TRANSFERÊNCIA CONCLUÍDA')
           .setDescription(
             `🎉 **Sua transferência foi aceita!**\n\n` +
-            `\> **Para:** \`${interaction.user.tag}\`\n` +
-            `\> **Valor:** \`${this.formatSafeNumber(transfer.valor)}\`\n` +
-            `\> **Motivo:** \`\`\`${transfer.comentario}\`\`\`\n` + // ✅ Incluir comentário
-            `\> **Data:** ${new Date().toLocaleString('pt-BR')}\n\n` +
+            `> **Para:** \`${interaction.user.tag}\`\n` +
+            `> **Valor:** \`${transfer.valor.toLocaleString()}\`\n` +
+            `> **Motivo:** \`\`\`${transfer.comentario}\`\`\`\n` +
+            `> **Data:** ${new Date().toLocaleString('pt-BR')}\n\n` +
             `💰 O valor já foi debitado da sua conta.`
           )
           .setColor(0x2ECC71)
-          .setFooter({
-            text: 'NOTAG Bot • Sistema Financeiro'
-          })
+          .setFooter({ text: 'NOTAG Bot • Sistema Financeiro' })
           .setTimestamp();
 
         await origemUser.send({ embeds: [embed] });
@@ -815,20 +782,18 @@ class FinanceHandler {
         console.log(`[Finance] Could not notify origin user ${transfer.fromId}`);
       }
 
-      // DM para quem aceitou COM COMENTÁRIO
+      // DM para quem aceitou
       const embedAceite = new EmbedBuilder()
         .setTitle('✅ TRANSFERÊNCIA RECEBIDA')
         .setDescription(
           `💰 **Você aceitou a transferência!**\n\n` +
-          `\> **De:** \`${transfer.fromTag}\`\n` +
-          `\> **Valor Recebido:** \`${this.formatSafeNumber(transfer.valor)}\`\n` +
-          `\> **Motivo:** \`\`\`${transfer.comentario}\`\`\`\n` + // ✅ Incluir comentário
-          `\> **Data:** ${new Date().toLocaleString('pt-BR')}`
+          `> **De:** \`${transfer.fromTag}\`\n` +
+          `> **Valor Recebido:** \`${transfer.valor.toLocaleString()}\`\n` +
+          `> **Motivo:** \`\`\`${transfer.comentario}\`\`\`\n` +
+          `> **Data:** ${new Date().toLocaleString('pt-BR')}`
         )
         .setColor(0x2ECC71)
-        .setFooter({
-          text: 'NOTAG Bot • Sistema Financeiro'
-        })
+        .setFooter({ text: 'NOTAG Bot • Sistema Financeiro' })
         .setTimestamp();
 
       await interaction.update({
@@ -837,22 +802,27 @@ class FinanceHandler {
         components: []
       });
 
-      const canalLogs = interaction.guild.channels.cache.find(c => c.name === '📜╠logs-banco');
-      if (canalLogs) {
-        await canalLogs.send({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle('📝 LOG: TRANSFERÊNCIA')
-              .setDescription(
-                `**De:** <@${transfer.fromId}>\n` +
-                `**Para:** <@${transfer.toId}>\n` +
-                `**Valor:** \`${this.formatSafeNumber(transfer.valor)}\`\n` +
-                `**Motivo:** \`${transfer.comentario}\`` // ✅ Incluir no log
-              )
-              .setColor(0x95A5A6)
-              .setTimestamp()
-          ]
-        });
+      // Log
+      const guild = interaction.client.guilds.cache.get(guildId);
+      if (guild) {
+        const canalLogs = guild.channels.cache.find(c => c.name === '📜╠logs-banco');
+        if (canalLogs) {
+          await canalLogs.send({
+            embeds: [
+              new EmbedBuilder()
+                .setTitle('📝 LOG: TRANSFERÊNCIA')
+                .setDescription(
+                  `**De:** <@${transfer.fromId}>\n` +
+                  `**Para:** <@${transfer.toId}>\n` +
+                  `**Valor:** \`${transfer.valor.toLocaleString()}\`\n` +
+                  `**Motivo:** \`${transfer.comentario}\`\n` +
+                  `**Servidor:** ${guild.name}`
+                )
+                .setColor(0x95A5A6)
+                .setTimestamp()
+            ]
+          });
+        }
       }
 
     } catch (error) {
@@ -885,7 +855,7 @@ class FinanceHandler {
 
       transfer.status = 'recusada';
 
-      // DM - Transferência Recusada (para origem)
+      // DM para origem
       try {
         const origemUser = await interaction.client.users.fetch(transfer.fromId);
 
@@ -893,15 +863,13 @@ class FinanceHandler {
           .setTitle('❌ TRANSFERÊNCIA RECUSADA')
           .setDescription(
             `⚠️ **Sua transferência foi recusada.**\n\n` +
-            `\> **Para:** \`${interaction.user.tag}\`\n` +
-            `\> **Valor:** \`${this.formatSafeNumber(transfer.valor)}\`\n` +
-            `\> **Motivo Original:** \`${transfer.comentario}\`\n\n` + // ✅ Mostrar o comentário mesmo quando recusado
+            `> **Para:** \`${interaction.user.tag}\`\n` +
+            `> **Valor:** \`${transfer.valor.toLocaleString()}\`\n` +
+            `> **Motivo Original:** \`${transfer.comentario}\`\n\n` +
             `💡 O valor não foi debitado da sua conta.`
           )
           .setColor(0xE74C3C)
-          .setFooter({
-            text: 'NOTAG Bot • Sistema Financeiro'
-          })
+          .setFooter({ text: 'NOTAG Bot • Sistema Financeiro' })
           .setTimestamp();
 
         await origemUser.send({ embeds: [embed] });
@@ -914,14 +882,12 @@ class FinanceHandler {
         .setTitle('❌ TRANSFERÊNCIA RECUSADA')
         .setDescription(
           `🚫 **Você recusou a transferência.**\n\n` +
-          `\> **De:** \`${transfer.fromTag}\`\n` +
-          `\> **Valor:** \`${this.formatSafeNumber(transfer.valor)}\`\n` +
-          `\> **Motivo:** \`${transfer.comentario}\``
+          `> **De:** \`${transfer.fromTag}\`\n` +
+          `> **Valor:** \`${transfer.valor.toLocaleString()}\`\n` +
+          `> **Motivo:** \`${transfer.comentario}\``
         )
         .setColor(0xE74C3C)
-        .setFooter({
-          text: 'NOTAG Bot • Sistema Financeiro'
-        })
+        .setFooter({ text: 'NOTAG Bot • Sistema Financeiro' })
         .setTimestamp();
 
       await interaction.update({
@@ -939,13 +905,14 @@ class FinanceHandler {
     }
   }
 
-  // ========== Consultar Saldo ==========
-  static async sendBalanceInfo(user) {
+  // ==================== CONSULTAR SALDO ====================
+
+  static async sendBalanceInfo(user, guildId) {
     try {
-      const userData = await Database.getUser(user.id);
+      const userData = await Database.getUser(guildId, user.id);
 
       if (!userData) {
-        console.error(`[Finance] User data not found for ${user.id}`);
+        console.error(`[Finance] User data not found for ${user.id} in guild ${guildId}`);
         throw new Error('Dados do usuário não encontrados');
       }
 
@@ -960,13 +927,13 @@ class FinanceHandler {
         .setTitle('💰 SEU SALDO')
         .setDescription(
           `📊 **Resumo Financeiro Completo**\n\n` +
-          `💵 **Saldo Bruto:** \`\`\`${this.formatSafeNumber(saldo)}\`\`\`\n` +
-          `📉 **Empréstimos Pendentes:** \`\`\`${this.formatSafeNumber(emprestimosPendentes)}\`\`\`\n` +
-          `✨ **Saldo Líquido:** \`\`\`${this.formatSafeNumber(saldoLiquido)}\`\`\`\n\n` +
+          `💵 **Saldo Bruto:** \`\`\`${saldo.toLocaleString()}\`\`\`\n` +
+          `📉 **Empréstimos Pendentes:** \`\`\`${emprestimosPendentes.toLocaleString()}\`\`\`\n` +
+          `✨ **Saldo Líquido:** \`\`\`${saldoLiquido.toLocaleString()}\`\`\`\n\n` +
           `📈 **Estatísticas:**\n` +
-          `\> Total Recebido: \`${this.formatSafeNumber(totalRecebido)}\`\n` +
-          `\> Total Sacado: \`${this.formatSafeNumber(totalSacado)}\`\n` +
-          `\> Total em Empréstimos: \`${this.formatSafeNumber(totalEmprestimos)}\``
+          `> Total Recebido: \`${totalRecebido.toLocaleString()}\`\n` +
+          `> Total Sacado: \`${totalSacado.toLocaleString()}\`\n` +
+          `> Total em Empréstimos: \`${totalEmprestimos.toLocaleString()}\``
         )
         .setColor(0x2ECC71)
         .setFooter({
@@ -985,7 +952,7 @@ class FinanceHandler {
       });
 
       await user.send({ embeds: [embed] });
-      console.log(`[Finance] Balance info sent to ${user.id}`);
+      console.log(`[Finance] Balance info sent to ${user.id} (Guild: ${guildId})`);
     } catch (error) {
       console.error(`[Finance] Error sending balance info:`, error);
       throw error;

@@ -26,14 +26,14 @@ class XpHandler {
   }
 
   /**
-   * Adiciona XP a um usuário
+   * Adiciona XP a um usuário - Versão Multi-Servidor
    */
-  static async addXp(userId, amount, reason, guild, channel) {
+  static async addXp(guildId, userId, amount, reason, guild, channel) {
     try {
-      const user = await Database.getUser(userId);
+      const user = await Database.getUser(guildId, userId);
 
       if (!user) {
-        console.error(`[XpHandler] User ${userId} not found in database`);
+        console.error(`[XpHandler] User ${userId} not found in database for guild ${guildId}`);
         return { success: false, error: 'User not found' };
       }
 
@@ -56,7 +56,7 @@ class XpHandler {
         leveledUp = true;
       }
 
-      await Database.updateUser(userId, {
+      await Database.updateUser(guildId, userId, {
         xp: user.xp,
         level: user.level,
         total_xp: user.totalXp
@@ -74,17 +74,17 @@ class XpHandler {
 
       return { success: true, leveledUp, newLevel: user.level };
     } catch (error) {
-      console.error(`[XpHandler] Error adding XP to ${userId}:`, error);
+      console.error(`[XpHandler] Error adding XP to ${userId} in guild ${guildId}:`, error);
       return { success: false, error: error.message };
     }
   }
 
   /**
-   * Remove XP de um usuário
+   * Remove XP de um usuário - Versão Multi-Servidor
    */
-  static async removeXp(userId, amount, reason, channel) {
+  static async removeXp(guildId, userId, amount, reason, channel) {
     try {
-      const user = await Database.getUser(userId);
+      const user = await Database.getUser(guildId, userId);
 
       if (!user) {
         return { success: false, error: 'User not found' };
@@ -96,7 +96,7 @@ class XpHandler {
       user.xp = Math.max(0, user.xp - amount);
       user.totalXp = Math.max(0, user.totalXp - amount);
 
-      await Database.updateUser(userId, {
+      await Database.updateUser(guildId, userId, {
         xp: user.xp,
         total_xp: user.totalXp
       });
@@ -108,7 +108,8 @@ class XpHandler {
             `**Usuário:** <@${userId}>\n` +
             `**XP Removido:** \`${amount.toLocaleString()}\`\n` +
             `**Motivo:** ${reason || 'Não especificado'}\n` +
-            `**XP Atual:** \`${user.xp.toLocaleString()}\``
+            `**XP Atual:** \`${user.xp.toLocaleString()}\`\n` +
+            `**Servidor:** ${guildId}`
           )
           .setColor(0xE74C3C)
           .setTimestamp();
@@ -164,7 +165,8 @@ class XpHandler {
         .setDescription(
           `🎊 **Parabéns! Você subiu de nível!**\n\n` +
           `⭐ **Nível Anterior:** \`${oldLevel}\`\n` +
-          `🏆 **Novo Nível:** \`${newLevel}\`\n\n` +
+          `🏆 **Novo Nível:** \`${newLevel}\`\n` +
+          `🏰 **Servidor:** ${guild?.name || 'NOTAG'}\n\n` +
           `🎁 **Recompensas desbloqueadas:**\n` +
           `\> Acesso a novos conteúdos\n` +
           `\> Reconhecimento na guilda\n` +
@@ -173,7 +175,7 @@ class XpHandler {
         )
         .setColor(0xFFD700)
         .setFooter({
-          text: `NOTAG Bot • Albion Academy • ${guild.name}`
+          text: `NOTAG Bot • Albion Academy • ${guild?.name || ''}`
         })
         .setTimestamp();
 
@@ -184,14 +186,14 @@ class XpHandler {
   }
 
   /**
-   * Mostra perfil de XP do usuário
+   * Mostra perfil de XP do usuário - Versão Multi-Servidor
    */
-  static async showProfile(userId, guild) {
+  static async showProfile(guildId, userId, guild) {
     try {
-      const user = await Database.getUser(userId);
+      const user = await Database.getUser(guildId, userId);
 
       if (!user) {
-        throw new Error('Usuário não encontrado no banco de dados');
+        throw new Error('Usuário não encontrado no banco de dados deste servidor');
       }
 
       const discordUser = await global.client.users.fetch(userId).catch(() => null);
@@ -211,6 +213,7 @@ class XpHandler {
       const embed = new EmbedBuilder()
         .setTitle(`👤 PERFIL DE ${discordUser?.username?.toUpperCase() || 'USUÁRIO'}`)
         .setDescription(
+          `🏰 **Servidor:** ${guild?.name || 'NOTAG'}\n\n` +
           `🎮 **Nível:** \`${level}\`\n` +
           `⭐ **XP Atual:** \`${xp.toLocaleString()} / ${xpForNext.toLocaleString()}\`\n` +
           `📊 **Progresso:** \`${progressBar}\` \`${progressPercent}%\`\n` +
@@ -242,6 +245,7 @@ class XpHandler {
         '⭐ Ganhe XP participando de eventos\n' +
         '📈 Suba de nível e desbloqueie recompensas\n' +
         '🎖️ Colete insígnias exclusivas\n\n' +
+        '💡 **O XP é específico de cada servidor.**\n\n' +
         '**Ações disponíveis:**'
       )
       .setColor(0x9B59B6)
@@ -308,10 +312,11 @@ class XpHandler {
   }
 
   /**
-   * Processa criação de evento XP
+   * Processa criação de evento XP - Versão Multi-Servidor
    */
   static async processXpEventCreation(interaction) {
     try {
+      const guildId = interaction.guild.id;
       const nome = interaction.fields.getTextInputValue('nome_evento_xp');
       const descricao = interaction.fields.getTextInputValue('desc_evento_xp') || 'Sem descrição';
       const xpBaseInput = interaction.fields.getTextInputValue('xp_base_evento').trim();
@@ -324,7 +329,7 @@ class XpHandler {
         });
       }
 
-      const canalLog = interaction.guild.channels.cache.find(c => c.name === 'log-xp');
+      const canalLog = interaction.guild.channels.cache.find(c => c.name === '📜╠log-xp');
       if (!canalLog) {
         return interaction.reply({
           content: '❌ Canal log-xp não encontrado! Crie o canal primeiro.',
@@ -340,7 +345,8 @@ class XpHandler {
         .addFields(
           { name: '👤 Criador', value: `<@${interaction.user.id}>`, inline: true },
           { name: '⭐ XP Base', value: `\`${xpBase.toLocaleString()}\``, inline: true },
-          { name: '📊 Status', value: '🟢 Ativo', inline: true }
+          { name: '📊 Status', value: '🟢 Ativo', inline: true },
+          { name: '🏰 Servidor', value: interaction.guild.name, inline: true }
         )
         .setColor(0x9B59B6)
         .setTimestamp();
@@ -360,6 +366,7 @@ class XpHandler {
       if (!global.activeXpEvents) global.activeXpEvents = new Map();
       global.activeXpEvents.set(eventId, {
         id: eventId,
+        guildId: guildId, // ✅ guildId para multi-servidor
         nome: nome,
         criador: interaction.user.id,
         xpBase: xpBase,
@@ -393,9 +400,18 @@ class XpHandler {
   static async handleEventParticipation(interaction, eventId) {
     try {
       const event = global.activeXpEvents?.get(eventId);
+
       if (!event) {
         return interaction.reply({
           content: '❌ Evento não encontrado ou já finalizado!',
+          ephemeral: true
+        });
+      }
+
+      // Verificar se é do mesmo servidor
+      if (event.guildId && event.guildId !== interaction.guild.id) {
+        return interaction.reply({
+          content: '❌ Este evento é de outro servidor!',
           ephemeral: true
         });
       }
@@ -424,14 +440,24 @@ class XpHandler {
   }
 
   /**
-   * Finaliza evento XP e distribui XP
+   * Finaliza evento XP e distribui XP - Versão Multi-Servidor
    */
   static async finalizeXpEvent(interaction, eventId) {
     try {
+      const guildId = interaction.guild.id;
       const event = global.activeXpEvents?.get(eventId);
+
       if (!event) {
         return interaction.reply({
           content: '❌ Evento não encontrado!',
+          ephemeral: true
+        });
+      }
+
+      // Verificar se é do mesmo servidor
+      if (event.guildId && event.guildId !== guildId) {
+        return interaction.reply({
+          content: '❌ Este evento é de outro servidor!',
           ephemeral: true
         });
       }
@@ -446,7 +472,7 @@ class XpHandler {
         }
       }
 
-      const canalLog = interaction.guild.channels.cache.find(c => c.name === 'log-xp');
+      const canalLog = interaction.guild.channels.cache.find(c => c.name === '📜╠log-xp');
       if (!canalLog) {
         return interaction.reply({
           content: '❌ Canal log-xp não encontrado!',
@@ -456,7 +482,8 @@ class XpHandler {
 
       let distribuidos = 0;
       for (const userId of event.participantes) {
-        await XpHandler.addXp(userId, event.xpBase, `Participação em: ${event.nome}`, interaction.guild, canalLog);
+        // ✅ COM guildId
+        await XpHandler.addXp(guildId, userId, event.xpBase, `Participação em: ${event.nome}`, interaction.guild, canalLog);
         distribuidos++;
       }
 
@@ -485,11 +512,11 @@ class XpHandler {
   }
 
   /**
-   * Mostra ranking de XP
+   * Mostra ranking de XP - Versão Multi-Servidor
    */
-  static async showRanking(guild, limit = 10) {
+  static async showRanking(guildId, guild, limit = 10) {
     try {
-      const allUsers = await Database.getAllUsers();
+      const allUsers = await Database.getAllUsers(guildId);
 
       const sortedUsers = allUsers
         .filter(u => u.totalXp > 0)
@@ -497,7 +524,7 @@ class XpHandler {
         .slice(0, limit);
 
       const embed = new EmbedBuilder()
-        .setTitle('🏆 RANKING DE XP - ALBION ACADEMY')
+        .setTitle(`🏆 RANKING DE XP - ${guild?.name || 'ALBION ACADEMY'}`)
         .setDescription('Os jogadores mais dedicados da guilda!')
         .setColor(0xFFD700)
         .setTimestamp();
@@ -505,7 +532,7 @@ class XpHandler {
       if (sortedUsers.length === 0) {
         embed.addFields({
           name: '📊 Sem dados',
-          value: 'Nenhum jogador possui XP ainda.'
+          value: 'Nenhum jogador possui XP neste servidor ainda.'
         });
       } else {
         for (let i = 0; i < sortedUsers.length; i++) {
@@ -513,7 +540,7 @@ class XpHandler {
           const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : '▫️';
 
           try {
-            const discordUser = await global.client.users.fetch(user.id);
+            const discordUser = await global.client.users.fetch(user.userId);
             embed.addFields({
               name: `${medal} #${i + 1} ${discordUser.username}`,
               value: `Nível \`${user.level || 1}\` • \`${(user.totalXp || 0).toLocaleString()}\` XP total`,
@@ -537,12 +564,12 @@ class XpHandler {
   }
 
   /**
-   * ✅ NOVO: Adiciona uma insígnia ao usuário
+   * ✅ NOVO: Adiciona uma insígnia ao usuário - Versão Multi-Servidor
    * Usado pelo XpEventHandler para dar insígnias de conquistas
    */
-  static async addInsignia(userId, insigniaId, insigniaNome = null) {
+  static async addInsignia(guildId, userId, insigniaId, insigniaNome = null) {
     try {
-      const user = await Database.getUser(userId);
+      const user = await Database.getUser(guildId, userId);
       let insignias = [];
 
       try {
@@ -558,7 +585,7 @@ class XpHandler {
         obtidaEm: Date.now()
       });
 
-      await Database.updateUser(userId, {
+      await Database.updateUser(guildId, userId, {
         insignias: JSON.stringify(insignias)
       });
 

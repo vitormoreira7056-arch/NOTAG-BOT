@@ -84,7 +84,7 @@ class EventHandler {
 
       const eventData = {
         id: eventId,
-        guildId: guild.id, // ✅ CORREÇÃO: Adicionado guildId
+        guildId: guild.id, // ✅ guildId para multi-servidor
         nome: nome,
         descricao: descricao,
         requisitos: requisitos,
@@ -118,7 +118,7 @@ class EventHandler {
         content: `✅ **Evento criado com sucesso!**\n\n🎮 **${nome}**\n🕐 ${horario}\n🔊 Canal: <#${canalVoz.id}>`
       });
 
-      console.log(`⚔️ Evento criado: ${nome} por ${interaction.user.tag}`);
+      console.log(`⚔️ Evento criado: ${nome} por ${interaction.user.tag} (Guild: ${guild.id})`);
 
     } catch (error) {
       console.error('[handleCreateEvent] Erro ao criar evento:', error);
@@ -160,7 +160,7 @@ class EventHandler {
     const embed = new EmbedBuilder()
       .setTitle(`${statusEmojis[eventData.status]} ┃ ${eventData.nome}`)
       .setDescription(
-        `\> ${eventData.descricao}\n\n` +
+        `> ${eventData.descricao}\n\n` +
         `**👤 Criador:** <@${eventData.criadorId}>\n` +
         `**🕐 Horário:** \`${eventData.horario}\`\n` +
         `**📊 Status:** ${statusTextos[eventData.status]}\n` +
@@ -693,7 +693,7 @@ class EventHandler {
         if (msg) await msg.delete();
       }
 
-      // ✅ CORREÇÃO: Garantir que guildId está presente antes de salvar
+      // ✅ Garantir que guildId está presente antes de salvar
       const eventDataToSave = {
         ...eventData,
         guildId: eventData.guildId || interaction.guild.id, // Garantir guildId
@@ -790,7 +790,7 @@ class EventHandler {
       const embedResumo = new EmbedBuilder()
         .setTitle(`✅ ┃ ${eventData.nome.toUpperCase()}`)
         .setDescription(
-          `\> ${eventData.descricao}\n\n` +
+          `> ${eventData.descricao}\n\n` +
           `**👤 Criador:** <@${eventData.criadorId}>\n` +
           `**🕐 Horário:** \`${eventData.horario}\`\n` +
           `**⏱️ Duração Total:** \`${tempoTotalMin}\` minutos\n` +

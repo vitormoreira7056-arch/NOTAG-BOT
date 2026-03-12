@@ -10,7 +10,8 @@ const {
 } = require('discord.js');
 
 /**
- * Handler para Raid Avalon - Sistema de Classes e Armas
+ * Handler para Raid Avalon - Versão Multi-Servidor
+ * Sistema de Classes e Armas
  */
 class RaidAvalonHandler {
   constructor() {
@@ -54,9 +55,14 @@ class RaidAvalonHandler {
    */
   static async showClassConfigModal(interaction, raidData) {
     try {
-      // Armazenar dados temporários
+      const guildId = interaction.guild.id;
+
+      // Armazenar dados temporários com guildId
       if (!global.raidTemp) global.raidTemp = new Map();
-      global.raidTemp.set(interaction.user.id, raidData);
+      global.raidTemp.set(interaction.user.id, {
+        ...raidData,
+        guildId: guildId
+      });
 
       // Criar embed de configuração
       const embed = new EmbedBuilder()
@@ -239,7 +245,9 @@ class RaidAvalonHandler {
    */
   static async createRaid(interaction) {
     try {
+      const guildId = interaction.guild.id;
       const raidData = global.raidTemp?.get(interaction.user.id);
+
       if (!raidData) {
         return interaction.reply({
           content: '❌ Dados da raid não encontrados.',
@@ -301,7 +309,7 @@ class RaidAvalonHandler {
 
       // Completar dados da raid
       raidData.id = eventId;
-      raidData.guildId = guild.id; // ✅ CORREÇÃO: Adicionado guildId
+      raidData.guildId = guildId; // ✅ guildId para multi-servidor
       raidData.criadorId = interaction.user.id;
       raidData.criadorTag = interaction.user.tag;
       raidData.canalVozId = canalVoz.id;
@@ -344,6 +352,7 @@ class RaidAvalonHandler {
       global.activeRaids.set(eventId, raidData);
 
       // Adicionar também em activeEvents para compatibilidade com lootsplit
+      if (!global.activeEvents) global.activeEvents = new Map();
       global.activeEvents.set(eventId, {
         ...raidData,
         participantes: this.getAllParticipantsMap(raidData)
@@ -356,7 +365,7 @@ class RaidAvalonHandler {
         content: `✅ **Raid Avalon criada com sucesso!**\n\n🏰 **${raidData.nome}**\n🕐 ${raidData.horario}\n🔊 Canal: <#${canalVoz.id}>`
       });
 
-      console.log(`🏰 Raid Avalon criada: ${raidData.nome} por ${interaction.user.tag}`);
+      console.log(`🏰 Raid Avalon criada: ${raidData.nome} por ${interaction.user.tag} (Guild: ${guildId})`);
 
     } catch (error) {
       console.error('[RaidAvalon] Error creating raid:', error);
@@ -520,6 +529,14 @@ class RaidAvalonHandler {
         });
       }
 
+      // Verificar se é do mesmo servidor
+      if (raidData.guildId && raidData.guildId !== interaction.guild.id) {
+        return interaction.reply({
+          content: '❌ Esta raid é de outro servidor!',
+          ephemeral: true
+        });
+      }
+
       // Verificar se raid já iniciou
       if (raidData.status !== 'aguardando') {
         return interaction.reply({
@@ -594,10 +611,20 @@ class RaidAvalonHandler {
    */
   static async processWeaponSelect(interaction, raidId, classKey, weaponKey) {
     try {
+      const guildId = interaction.guild.id;
       const raidData = global.activeRaids?.get(raidId);
+
       if (!raidData) {
         return interaction.reply({
           content: '❌ Raid não encontrada!',
+          ephemeral: true
+        });
+      }
+
+      // Verificar se é do mesmo servidor
+      if (raidData.guildId && raidData.guildId !== guildId) {
+        return interaction.reply({
+          content: '❌ Esta raid é de outro servidor!',
           ephemeral: true
         });
       }
@@ -635,38 +662,11 @@ class RaidAvalonHandler {
       // Atualizar painel
       await this.updateRaidPanel(interaction, raidData);
 
-      // Enviar imagens do set + arma
-      const armaImagePath = `png/raid/${weaponKey}.png`;
-      const setSkipPath = `png/raid/set-skip.png`;
-
-      try {
-        await interaction.reply({
-          content: `✅ **Você entrou na raid como ${classKey.toUpperCase()}!**\n\n` +
-            `⚔️ **Arma:** ${armaNome}\n` +
-            `📋 **Set recomendado:**`,
-          files: [armaImagePath, setSkipPath],
-          ephemeral: true
-        });
-      } catch (imgError) {
-        // Tentar enviar só o set se a imagem da arma não existir
-        try {
-          await interaction.reply({
-            content: `✅ **Você entrou na raid como ${classKey.toUpperCase()}!**\n\n` +
-              `⚔️ **Arma:** ${armaNome}\n` +
-              `📋 **Set recomendado:**`,
-            files: [setSkipPath],
-            ephemeral: true
-          });
-        } catch (setError) {
-          // Se nem o set existir, envia sem imagens
-          await interaction.reply({
-            content: `✅ **Você entrou na raid como ${classKey.toUpperCase()}!**\n\n` +
-              `⚔️ **Arma:** ${armaNome}\n\n` +
-              `⚠️ *Imagens do set não encontradas.*`,
-            ephemeral: true
-          });
-        }
-      }
+      // Enviar mensagem de confirmação
+      await interaction.reply({
+        content: `✅ **Você entrou na raid como ${classKey.toUpperCase()}!**\n\n⚔️ **Arma:** ${armaNome}`,
+        ephemeral: true
+      });
 
     } catch (error) {
       console.error('[RaidAvalon] Error processing weapon select:', error);
@@ -715,6 +715,14 @@ class RaidAvalonHandler {
    */
   static async updateRaidPanel(interaction, raidData) {
     try {
+      const guildId = interaction.guild.id;
+
+      // Verificar se é do mesmo servidor
+      if (raidData.guildId && raidData.guildId !== guildId) {
+        console.error('[RaidAvalon] Tentativa de atualizar raid de outro servidor');
+        return;
+      }
+
       const canal = interaction.guild.channels.cache.get(raidData.canalTextoId);
       if (!canal) return;
 
@@ -750,9 +758,19 @@ class RaidAvalonHandler {
    */
   static async handleIniciar(interaction, raidId) {
     try {
+      const guildId = interaction.guild.id;
       const raidData = global.activeRaids?.get(raidId);
+
       if (!raidData) {
         return interaction.reply({ content: '❌ Raid não encontrada!', ephemeral: true });
+      }
+
+      // Verificar se é do mesmo servidor
+      if (raidData.guildId && raidData.guildId !== guildId) {
+        return interaction.reply({
+          content: '❌ Esta raid é de outro servidor!',
+          ephemeral: true
+        });
       }
 
       const isCriador = interaction.user.id === raidData.criadorId;
@@ -826,9 +844,19 @@ class RaidAvalonHandler {
 
   static async handleFinalizar(interaction, raidId) {
     try {
+      const guildId = interaction.guild.id;
       const raidData = global.activeRaids?.get(raidId);
+
       if (!raidData) {
         return interaction.reply({ content: '❌ Raid não encontrada!', ephemeral: true });
+      }
+
+      // Verificar se é do mesmo servidor
+      if (raidData.guildId && raidData.guildId !== guildId) {
+        return interaction.reply({
+          content: '❌ Esta raid é de outro servidor!',
+          ephemeral: true
+        });
       }
 
       const isCriador = interaction.user.id === raidData.criadorId;
@@ -904,10 +932,10 @@ class RaidAvalonHandler {
         }
       }
 
-      // ✅ CORREÇÃO: Garantir guildId ao salvar em finishedEvents
+      // ✅ Garantir guildId ao salvar em finishedEvents
       global.finishedEvents.set(raidId, {
         ...raidData,
-        guildId: raidData.guildId || interaction.guild.id, // Garantir guildId
+        guildId: raidData.guildId || guildId, // Garantir guildId
         participantes: participantesMap,
         finalizadoEm: Date.now()
       });
@@ -928,9 +956,19 @@ class RaidAvalonHandler {
 
   static async handleCancelar(interaction, raidId) {
     try {
+      const guildId = interaction.guild.id;
       const raidData = global.activeRaids?.get(raidId);
+
       if (!raidData) {
         return interaction.reply({ content: '❌ Raid não encontrada!', ephemeral: true });
+      }
+
+      // Verificar se é do mesmo servidor
+      if (raidData.guildId && raidData.guildId !== guildId) {
+        return interaction.reply({
+          content: '❌ Esta raid é de outro servidor!',
+          ephemeral: true
+        });
       }
 
       const isCriador = interaction.user.id === raidData.criadorId;
@@ -970,6 +1008,14 @@ class RaidAvalonHandler {
 
   static async createFinishedRaidSummary(interaction, raidData) {
     try {
+      const guildId = interaction.guild.id;
+
+      // Verificar se é do mesmo servidor
+      if (raidData.guildId && raidData.guildId !== guildId) {
+        console.error('[RaidAvalon] Tentativa de criar resumo de raid de outro servidor');
+        return;
+      }
+
       const categoriaEncerrados = interaction.guild.channels.cache.find(
         c => c.name === '📁 EVENTOS ENCERRADOS' && c.type === ChannelType.GuildCategory
       );
@@ -980,7 +1026,7 @@ class RaidAvalonHandler {
       }
 
       // Buscar taxa da guilda
-      const config = global.guildConfig?.get(interaction.guild.id) || {};
+      const config = global.guildConfig?.get(guildId) || {};
       const taxaGuilda = config.taxaGuilda || 10;
 
       // Calcular tempo total
@@ -1043,7 +1089,7 @@ class RaidAvalonHandler {
         components: [botoes]
       });
 
-      console.log(`[RaidAvalon] Created finished raid channel: ${canal.name}`);
+      console.log(`[RaidAvalon] Created finished raid channel: ${canal.name} (Guild: ${guildId})`);
 
     } catch (error) {
       console.error('[RaidAvalon] Error creating summary:', error);

@@ -11,8 +11,8 @@ const {
 const Database = require('../utils/database');
 
 /**
- * Handler de Depósitos - Versão Direta com Seleção de Usuários
- * Fluxo: Selecionar Usuários → Definir Valor → Depósito Direto (sem aprovação)
+ * Handler de Depósitos - Versão Multi-Servidor
+ * Fluxo: Selecionar Usuários → Definir Valor → Depósito Direto
  */
 class DepositHandler {
 
@@ -80,6 +80,8 @@ class DepositHandler {
 
  static async handleDepositoButton(interaction) {
  try {
+ const guildId = interaction.guild.id;
+
  // Verificar permissões - Apenas ADM/Staff
  const isADM = interaction.member.roles.cache.some(r => r.name === 'ADM');
  const isStaff = interaction.member.roles.cache.some(r => r.name === 'Staff');
@@ -95,6 +97,7 @@ class DepositHandler {
  if (!global.depositTemp) global.depositTemp = new Map();
 
  const tempData = global.depositTemp.get(interaction.user.id) || {
+ guildId: guildId,
  users: [],
  step: 'selecting'
  };
@@ -147,7 +150,7 @@ class DepositHandler {
  ephemeral: true
  });
 
- console.log(`[DepositHandler] Interface de seleção aberta por ${interaction.user.tag}`);
+ console.log(`[DepositHandler] Interface de seleção aberta por ${interaction.user.tag} (Guild: ${guildId})`);
 
  } catch (error) {
  console.error(`[DepositHandler] Erro ao abrir seleção:`, error);
@@ -192,7 +195,11 @@ class DepositHandler {
  const selectedUsers = interaction.values;
 
  if (!global.depositTemp) global.depositTemp = new Map();
- const tempData = global.depositTemp.get(interaction.user.id) || { users: [], step: 'selecting' };
+ const tempData = global.depositTemp.get(interaction.user.id) || { 
+ guildId: interaction.guild.id,
+ users: [], 
+ step: 'selecting' 
+ };
 
  // Adicionar novos usuários (evitar duplicados)
  const existingUsers = new Set(tempData.users);
@@ -270,7 +277,7 @@ class DepositHandler {
  .setStyle(ButtonStyle.Primary)
  )
  ]
- });
+ ]);
 
  console.log(`[DepositHandler] Seleção limpa por ${interaction.user.tag}`);
 
@@ -340,6 +347,8 @@ class DepositHandler {
 
  static async processDeposito(interaction) {
  try {
+ const guildId = interaction.guild.id;
+
  // Verificar permissões novamente (segurança)
  const isADM = interaction.member.roles.cache.some(r => r.name === 'ADM');
  const isStaff = interaction.member.roles.cache.some(r => r.name === 'Staff');
@@ -381,6 +390,14 @@ class DepositHandler {
  });
  }
 
+ // Verificar se é do mesmo servidor
+ if (tempData.guildId && tempData.guildId !== guildId) {
+ return interaction.reply({
+ content: '❌ Erro: Dados de outro servidor detectados. Por favor, comece novamente.',
+ ephemeral: true
+ });
+ }
+
  const userIds = tempData.users;
  const totalValor = valor * userIds.length;
 
@@ -392,6 +409,7 @@ class DepositHandler {
  try {
  // Adicionar saldo diretamente - sem aprovação do financeiro
  await Database.addSaldo(
+ guildId,  // 🆕 NOVO: guildId adicionado
  userId, 
  valor, 
  `Depósito direto: ${motivo} (por ${interaction.user.tag})`
@@ -414,7 +432,8 @@ class DepositHandler {
  `👥 **Jogadores:** ${sucessos.length}\n` +
  `💵 **Total depositado:** ${totalValor.toLocaleString()}\n` +
  `📝 **Motivo:** ${motivo}\n` +
- `👤 **Realizado por:** ${interaction.user}`
+ `👤 **Realizado por:** ${interaction.user}\n` +
+ `🏰 **Servidor:** ${interaction.guild.name}`
  )
  .setColor(0x2ECC71)
  .setTimestamp();
@@ -449,7 +468,8 @@ class DepositHandler {
  `🎉 **Você recebeu um depósito!**\n\n` +
  `💵 **Valor:** ${valor.toLocaleString()}\n` +
  `📝 **Motivo:** ${motivo}\n` +
- `👤 **Depositado por:** ${interaction.user.tag}\n\n` +
+ `👤 **Depositado por:** ${interaction.user.tag}\n` +
+ `🏰 **Servidor:** ${interaction.guild.name}\n\n` +
  `💡 Use o comando de saldo para verificar sua conta.`
  )
  .setColor(0x2ECC71)
@@ -461,7 +481,7 @@ class DepositHandler {
  }
  }
 
- console.log(`[DepositHandler] Depósito realizado: ${valor} para ${sucessos.length}/${userIds.length} usuários por ${interaction.user.tag}`);
+ console.log(`[DepositHandler] Depósito realizado: ${valor} para ${sucessos.length}/${userIds.length} usuários no servidor ${guildId}`);
 
  // Log para canal de auditoria (opcional)
  const canalAuditoria = interaction.guild.channels.cache.find(c => c.name === '📜╠logs-banco');
@@ -473,7 +493,8 @@ class DepositHandler {
  `💰 **Valor por jogador:** ${valor.toLocaleString()}\n` +
  `👥 **Quantidade:** ${sucessos.length} jogador(es)\n` +
  `💵 **Total:** ${totalValor.toLocaleString()}\n` +
- `📝 **Motivo:** ${motivo}`
+ `📝 **Motivo:** ${motivo}\n` +
+ `🏰 **Servidor:** ${interaction.guild.name} (${guildId})`
  )
  .setColor(0x3498DB)
  .setTimestamp();
@@ -500,9 +521,11 @@ class DepositHandler {
 
  static async showHistorico(interaction) {
  try {
+ const guildId = interaction.guild.id;
+
  let history = [];
  try {
- const result = await Database.getUserHistory(interaction.user.id);
+ const result = await Database.getUserHistory(guildId, interaction.user.id);
  history = Array.isArray(result) ? result : [];
  } catch (dbError) {
  console.error(`[DepositHandler] Erro ao buscar histórico:`, dbError);
@@ -516,14 +539,14 @@ class DepositHandler {
 
  if (depositos.length === 0) {
  return interaction.reply({
- content: '❌ Você não possui depósitos registrados.',
+ content: '❌ Você não possui depósitos registrados neste servidor.',
  ephemeral: true
  });
  }
 
  const embed = new EmbedBuilder()
  .setTitle('📋 HISTÓRICO DE DEPÓSITOS')
- .setDescription(`Últimos ${depositos.length} depósitos:`)
+ .setDescription(`Últimos ${depositos.length} depósitos em ${interaction.guild.name}:`)
  .setColor(0x3498DB);
 
  depositos.forEach((dep, index) => {
@@ -560,10 +583,12 @@ class DepositHandler {
  '3️⃣ Digite o valor (números normais: 100, 1000, 10000)\n' +
  '4️⃣ Adicione um motivo opcional\n' +
  '5️⃣ O valor será creditado **instantaneamente**\n\n' +
+ `🏰 **Servidor atual:** ${interaction.guild.name}\n\n` +
  '**⚠️ Importante:**\n' +
  '• Apenas **ADM** e **Staff** podem fazer depósitos diretos\n' +
  '• Os jogadores receberão notificação no privado\n' +
  '• Todos os depósitos são registrados para auditoria\n' +
+ '• Cada servidor possui saldos independentes\n' +
  '• Não é necessário aprovação do financeiro'
  )
  .setColor(0x95A5A6);

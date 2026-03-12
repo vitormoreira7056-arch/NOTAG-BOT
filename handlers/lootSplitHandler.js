@@ -22,7 +22,7 @@ class LootSplitHandler {
   // ✅ CONSTANTES DE XP
   static XP_RATES = {
     EVENTO_NORMAL: 1, // 1 XP por minuto
-    RAID_AVALON: 2    // 2 XP por minuto (dobro)
+    RAID_AVALON: 2 // 2 XP por minuto (dobro)
   };
 
   // ✅ FUNÇÃO AUXILIAR: Formatar tempo em HH:MM:SS
@@ -80,6 +80,8 @@ class LootSplitHandler {
     try {
       console.log(`[LootSplit] Processing simulation for event: ${eventId}`);
 
+      const guildId = interaction.guild.id;
+
       const valorTotal = parseInt(interaction.fields.getTextInputValue('valor_total'));
       const valorSacosInput = interaction.fields.getTextInputValue('valor_sacos');
       const valorReparoInput = interaction.fields.getTextInputValue('valor_reparo');
@@ -113,7 +115,15 @@ class LootSplitHandler {
         });
       }
 
-      const config = global.guildConfig?.get(interaction.guild.id) || {};
+      // Verificar se é do mesmo servidor
+      if (eventData.guildId && eventData.guildId !== guildId) {
+        return interaction.reply({
+          content: '❌ Este evento é de outro servidor!',
+          ephemeral: true
+        });
+      }
+
+      const config = global.guildConfig?.get(guildId) || {};
       const taxaGuilda = config.taxaGuilda || 10;
 
       // ✅ Calcular tempo total do evento
@@ -168,7 +178,7 @@ class LootSplitHandler {
       const simulationData = {
         id: simulationId,
         eventId: eventId,
-        guildId: interaction.guild.id,
+        guildId: guildId, // ✅ guildId para multi-servidor
         canalEventoId: interaction.channel.id,
         criadorId: interaction.user.id,
         valorTotal,
@@ -178,7 +188,7 @@ class LootSplitHandler {
         taxaGuilda,
         valorDistribuir,
         distribuicao,
-        tempoTotalEvento: tempoTotalEvento, // ✅ Armazenar tempo total
+        tempoTotalEvento: tempoTotalEvento,
         eventoNome: eventData.nome,
         status: 'simulado',
         timestamp: Date.now()
@@ -187,7 +197,7 @@ class LootSplitHandler {
       if (!global.simulations) global.simulations = new Map();
       global.simulations.set(simulationId, simulationData);
 
-      console.log(`[LootSplit] Simulation ${simulationId} created. Base: ${valorBase} (Total: ${valorTotal} + Sacos: ${valorSacos} - Reparo: ${valorReparo})`);
+      console.log(`[LootSplit] Simulation ${simulationId} created. Base: ${valorBase} (Guild: ${guildId})`);
 
       const embed = this.createSimulationEmbed(simulationData, eventData);
 
@@ -222,9 +232,7 @@ class LootSplitHandler {
     }
   }
 
-  // ✅ ATUALIZADO: Mostrar tempo em HH:MM:SS e % de participação
   static createSimulationEmbed(simulation, eventData) {
-    // Calcular tempo total do evento
     const tempoTotalEvento = simulation.tempoTotalEvento || 0;
     const tempoTotalFormatado = this.formatTime(tempoTotalEvento);
 
@@ -242,17 +250,12 @@ class LootSplitHandler {
       .setColor(0xF1C40F)
       .setTimestamp();
 
-    // Lista de participantes com % de participação baseada no tempo total do evento
     const listaParticipantes = simulation.distribuicao.map(p => {
       const tempoFormatado = this.formatTime(p.tempo || 0);
-
-      // Calcular % de participação em relação ao tempo total do evento
       let percentParticipacao = 0;
       if (tempoTotalEvento > 0) {
         percentParticipacao = ((p.tempo || 0) / tempoTotalEvento) * 100;
       }
-
-      // Limitar a 100% (caso algum erro de timing)
       percentParticipacao = Math.min(percentParticipacao, 100);
 
       return `\`${p.nick}\`\n> 💰 **Valor:** \`${p.valor.toLocaleString()}\` | ⏱️ **Tempo:** \`${tempoFormatado}\` | 📊 **Participação:** \`${percentParticipacao.toFixed(1)}%\``;
@@ -264,7 +267,6 @@ class LootSplitHandler {
       inline: false
     });
 
-    // Adicionar legenda explicativa
     embed.setFooter({
       text: '💡 100% = Participou todo o evento | 50% = Participou metade do tempo | Formato: HH:MM:SS'
     });
@@ -276,10 +278,20 @@ class LootSplitHandler {
     try {
       console.log(`[LootSplit] Sending simulation ${simulationId} to financeiro`);
 
+      const guildId = interaction.guild.id;
       const simulation = global.simulations?.get(simulationId);
+
       if (!simulation) {
         return interaction.reply({
           content: '❌ Simulação não encontrada!',
+          ephemeral: true
+        });
+      }
+
+      // Verificar se é do mesmo servidor
+      if (simulation.guildId && simulation.guildId !== guildId) {
+        return interaction.reply({
+          content: '❌ Esta simulação é de outro servidor!',
           ephemeral: true
         });
       }
@@ -298,6 +310,7 @@ class LootSplitHandler {
         .setTitle('🔔 PAGAMENTO PENDENTE DE APROVAÇÃO')
         .setDescription(
           `**Evento:** ${eventData?.nome || 'Desconhecido'}\n` +
+          `**Servidor:** ${interaction.guild.name}\n` +
           `**Criador:** <@${simulation.criadorId}>\n` +
           `**Valor Total:** \`${simulation.valorTotal.toLocaleString()}\`\n` +
           `**Sacos:** \`${simulation.valorSacos.toLocaleString()}\`\n` +
@@ -350,10 +363,20 @@ class LootSplitHandler {
     try {
       console.log(`[LootSplit] Recalculating simulation ${simulationId}`);
 
+      const guildId = interaction.guild.id;
       const simulation = global.simulations?.get(simulationId);
+
       if (!simulation) {
         return interaction.reply({
           content: '❌ Simulação não encontrada!',
+          ephemeral: true
+        });
+      }
+
+      // Verificar se é do mesmo servidor
+      if (simulation.guildId && simulation.guildId !== guildId) {
+        return interaction.reply({
+          content: '❌ Esta simulação é de outro servidor!',
           ephemeral: true
         });
       }
@@ -374,10 +397,20 @@ class LootSplitHandler {
     try {
       console.log(`[LootSplit] Processing financial approval for ${simulationId}: ${aprovar}`);
 
+      const guildId = interaction.guild.id;
       const simulation = global.simulations?.get(simulationId);
+
       if (!simulation) {
         return interaction.reply({
           content: '❌ Simulação não encontrada!',
+          ephemeral: true
+        });
+      }
+
+      // Verificar se é do mesmo servidor
+      if (simulation.guildId && simulation.guildId !== guildId) {
+        return interaction.reply({
+          content: '❌ Esta simulação é de outro servidor!',
           ephemeral: true
         });
       }
@@ -409,7 +442,9 @@ class LootSplitHandler {
               return;
             }
 
+            // ✅ COM guildId
             const sucesso = await Database.addSaldo(
+              guildId,
               participante.userId,
               participante.valor,
               `loot_split_evento_${simulation.eventId}`
@@ -423,14 +458,16 @@ class LootSplitHandler {
               console.error(`[LootSplit] Falha ao adicionar saldo para ${participante.userId}`);
             }
 
+            // Notificar usuário
             interaction.client.users.fetch(participante.userId).then(user => {
-              Database.getSaldo(participante.userId).then(novoSaldo => {
+              Database.getSaldo(guildId, participante.userId).then(novoSaldo => {
                 const embed = new EmbedBuilder()
                   .setTitle('💰 PAGAMENTO RECEBIDO')
                   .setDescription(
                     `🎉 **Parabéns!** Você recebeu um pagamento!\n\n` +
                     `\> **Valor:** \`${participante.valor.toLocaleString()}\`\n` +
                     `\> **Evento:** ${simulation.eventId}\n` +
+                    `\> **Servidor:** ${interaction.guild.name}\n` +
                     `\> **Data:** ${new Date().toLocaleString('pt-BR')}\n\n` +
                     `💎 **Seu Novo Saldo:** \`${novoSaldo.toLocaleString()}\``
                   )
@@ -448,13 +485,13 @@ class LootSplitHandler {
         }));
       }
 
+      // Registrar taxa da guilda no banco do servidor
       if (simulation.valorTaxa > 0) {
-        await Database.addTransaction({
+        await Database.addTransaction(guildId, {
           type: 'credito',
           userId: 'GUILD_BANK',
           amount: simulation.valorTaxa,
           reason: 'taxa_guilda',
-          guildId: interaction.guild.id,
           eventId: simulation.eventId,
           approvedBy: interaction.user.id,
           approvedAt: Date.now()
@@ -505,6 +542,7 @@ class LootSplitHandler {
               .setTitle('📝 LOG: PAGAMENTO DE EVENTO')
               .setDescription(
                 `**Evento:** ${simulation.eventId}\n` +
+                `**Servidor:** ${interaction.guild.name}\n` +
                 `**Aprovado por:** <@${interaction.user.id}>\n` +
                 `**Valor Total:** \`${simulation.valorTotal.toLocaleString()}\`\n` +
                 `**Sacos:** \`${simulation.valorSacos.toLocaleString()}\`\n` +
@@ -526,12 +564,13 @@ class LootSplitHandler {
     }
   }
 
-  // ✅ ATUALIZADO: Distribuir XP proporcional ao tempo no arquivamento
   static async handleArquivar(interaction, eventId, simulationId) {
     try {
       console.log(`[LootSplit] Archiving event ${eventId} with simulation ${simulationId}`);
 
+      const guildId = interaction.guild.id;
       const simulation = global.simulations?.get(simulationId);
+
       if (!simulation) {
         return interaction.reply({
           content: '❌ Simulação não encontrada!',
@@ -539,21 +578,25 @@ class LootSplitHandler {
         });
       }
 
-      // Determinar se é Raid Avalon ou Evento Normal
+      // Verificar se é do mesmo servidor
+      if (simulation.guildId && simulation.guildId !== guildId) {
+        return interaction.reply({
+          content: '❌ Esta simulação é de outro servidor!',
+          ephemeral: true
+        });
+      }
+
       const eventData = global.finishedEvents?.get(simulation.eventId) || global.activeEvents?.get(simulation.eventId);
 
-      // Verificar se é raid avalon pelo ID ou pelos dados do evento
       const isRaidAvalon = eventId?.includes('raid') ||
         simulation.eventId?.includes('raid') ||
         eventData?.tipo === 'raid_avalon';
 
-      // Definir taxa de XP baseado no tipo de evento
       const xpRate = isRaidAvalon ? this.XP_RATES.RAID_AVALON : this.XP_RATES.EVENTO_NORMAL;
       const eventoTipo = isRaidAvalon ? '🔥 RAID AVALON' : '⚔️ Evento Normal';
 
       console.log(`[LootSplit] Arquivando ${eventoTipo} - Taxa XP: ${xpRate} XP/min`);
 
-      // DISTRIBUIR XP AOS PARTICIPANTES
       let totalXpDistribuido = 0;
       const canalLogXp = interaction.guild.channels.cache.find(c => c.name === '📜╠log-xp');
 
@@ -562,25 +605,20 @@ class LootSplitHandler {
 
         for (const participante of simulation.distribuicao) {
           try {
-            // Calcular tempo em minutos
             const tempoMinutos = Math.floor((participante.tempo || 0) / 1000 / 60);
-
-            // Calcular XP (tempo em minutos × taxa)
             const xpGanho = tempoMinutos * xpRate;
 
             if (xpGanho > 0) {
-              // Adicionar XP usando o handler
+              // Usando XpHandler com guildId
               await XpHandler.addXp(
+                guildId,
                 participante.userId,
                 xpGanho,
-                `Participação em ${eventoTipo} - ${simulation.eventId}`,
-                interaction.guild,
-                canalLogXp
+                `Participação em ${eventoTipo} - ${simulation.eventId}`
               );
 
               totalXpDistribuido += xpGanho;
 
-              // Notificar usuário por DM
               try {
                 const user = await interaction.client.users.fetch(participante.userId);
                 const embedXp = new EmbedBuilder()
@@ -590,7 +628,8 @@ class LootSplitHandler {
                     `📅 **Evento:** ${eventoTipo}\n` +
                     `⏱️ **Tempo Participado:** ${this.formatTime(participante.tempo || 0)}\n` +
                     `💎 **XP Ganho:** \`${xpGanho.toLocaleString()} XP\`\n` +
-                    `📈 **Taxa:** ${xpRate} XP/minuto\n\n` +
+                    `📈 **Taxa:** ${xpRate} XP/minuto\n` +
+                    `🏰 **Servidor:** ${interaction.guild.name}\n\n` +
                     `🎊 Continue participando dos eventos da guilda para subir de nível!`
                   )
                   .setColor(isRaidAvalon ? 0x9B59B6 : 0x2ECC71)
@@ -609,11 +648,10 @@ class LootSplitHandler {
         }
       }
 
-      // Salvar no histórico
-      await Database.addEventHistory({
+      // Salvar no histórico com guildId
+      await Database.addEventHistory(guildId, {
         eventId: eventId || simulation.eventId,
         simulationId: simulationId,
-        guildId: interaction.guild.id,
         arquivadoPor: interaction.user.id,
         timestamp: Date.now(),
         dados: {
@@ -624,19 +662,19 @@ class LootSplitHandler {
         }
       });
 
-      // ✅ INTEGRAÇÃO AUTOMÁTICA: Verificar eventos XP ativos
+      // Verificar eventos XP ativos
       try {
         await XpEventHandler.verificarEventosAtivos(interaction.guild, simulation.eventoNome);
       } catch (e) {
         console.error('[LootSplit] Error auto-checking XP events:', e);
       }
 
-      // Criar embed de confirmação do arquivamento com info de XP
       const embedArquivamento = new EmbedBuilder()
         .setTitle('📁 EVENTO ARQUIVADO')
         .setDescription(
           `✅ **Evento arquivado com sucesso!**\n\n` +
           `🏷️ **Tipo:** ${eventoTipo}\n` +
+          `🏰 **Servidor:** ${interaction.guild.name}\n` +
           `👥 **Participantes:** ${simulation.distribuicao?.length || 0}\n` +
           `💰 **Valor Total:** \`${(simulation.valorTotal || 0).toLocaleString()}\`\n` +
           `💎 **XP Total Distribuído:** \`${totalXpDistribuido.toLocaleString()} XP\`\n` +
@@ -654,7 +692,6 @@ class LootSplitHandler {
           components: []
         });
 
-        // Deletar canal após 10 segundos
         setTimeout(async () => {
           try {
             await canalEvento.delete('Evento arquivado');
@@ -665,7 +702,6 @@ class LootSplitHandler {
         }, 10000);
       }
 
-      // Log no canal de logs
       const canalLogs = interaction.guild.channels.cache.find(c => c.name === '📜╠logs-banco');
       if (canalLogs) {
         await canalLogs.send({
@@ -675,6 +711,7 @@ class LootSplitHandler {
               .setDescription(
                 `**Evento:** ${eventId || simulation.eventId}\n` +
                 `**Tipo:** ${eventoTipo}\n` +
+                `**Servidor:** ${interaction.guild.name}\n` +
                 `**Arquivado por:** <@${interaction.user.id}>\n` +
                 `**XP Distribuído:** \`${totalXpDistribuido.toLocaleString()} XP\`\n` +
                 `**Taxa:** ${xpRate} XP/min\n` +
