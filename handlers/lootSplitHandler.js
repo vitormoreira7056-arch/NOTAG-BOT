@@ -1,17 +1,12 @@
 const {
  EmbedBuilder,
- ActionRowBuilder,
- ButtonBuilder,
- ButtonStyle,
- ModalBuilder,
- TextInputBuilder,
- TextInputStyle,
- ChannelType,
- PermissionFlagsBits
+ ActionRowBuilder, ButtonBuilder, ButtonStyle,
+ ModalBuilder, TextInputBuilder, TextInputStyle,
+ ChannelType, PermissionFlagsBits
 } = require('discord.js');
 const Database = require('../utils/database');
 const XpHandler = require('./xpHandler');
-const XpEventHandler = require('./xpEventHandler');
+const XpEventHandler = require('./xpeventHandler');
 
 class LootSplitHandler {
  constructor() {
@@ -19,13 +14,13 @@ class LootSplitHandler {
  this.pendingApprovals = new Map();
  }
 
- // ✅ CONSTANTES DE XP
+ // 💎 CONSTANTES DE XP
  static XP_RATES = {
  EVENTO_NORMAL: 1, // 1 XP por minuto
  RAID_AVALON: 2 // 2 XP por minuto (dobro)
  };
 
- // ✅ FUNÇÃO AUXILIAR: Formatar tempo em HH:MM:SS
+ // ⏱️ FUNÇÃO AUXILIAR: Formatar tempo em HH:MM:SS
  static formatTime(milliseconds) {
  if (!milliseconds || milliseconds <= 0) return '00:00:00';
 
@@ -76,160 +71,237 @@ class LootSplitHandler {
  return modal;
  }
 
+ /**
+  * ✅ VALIDAÇÃO DE SEGURANÇA PARA VALORES FINANCEIROS
+  * Verifica: tipo numérico, NaN, Infinity, negativos, limites
+  */
+ static validarValorFinanceiro(valor, nomeCampo, permitirZero = false) {
+ // 1. Verificar se é número (não string, não null, não undefined)
+ if (typeof valor !== 'number') {
+ return { valido: false, erro: `❌ \`${nomeCampo}\` deve ser um número válido.` };
+ }
+
+ // 2. Verificar NaN (Not a Number)
+ if (Number.isNaN(valor)) {
+ return { valido: false, erro: `❌ \`${nomeCampo}\` não pode ser um valor inválido (NaN).` };
+ }
+
+ // 3. Verificar Infinity
+ if (!Number.isFinite(valor)) {
+ return { valido: false, erro: `❌ \`${nomeCampo}\` não pode ser infinito.` };
+ }
+
+ // 4. Verificar negativo
+ if (valor < 0) {
+ return { valido: false, erro: `❌ \`${nomeCampo}\` não pode ser negativo.` };
+ }
+
+ // 5. Verificar zero (se não permitido)
+ if (!permitirZero && valor === 0) {
+ return { valido: false, erro: `❌ \`${nomeCampo}\` não pode ser zero.` };
+ }
+
+ // 6. Verificar limite máximo realista (evita overflow em cálculos)
+ const LIMITE_MAXIMO = 999_999_999_999; // 999 bilhões
+ if (valor > LIMITE_MAXIMO) {
+ return { valido: false, erro: `❌ \`${nomeCampo}\` excede o limite máximo permitido.` };
+ }
+
+ // 7. Verificar se é inteiro seguro (evita precisão perdida em números muito grandes)
+ if (!Number.isSafeInteger(Math.floor(valor))) {
+ return { valido: false, erro: `❌ \`${nomeCampo}\` é muito grande e pode perder precisão.` };
+ }
+
+ // 8. Arredondar para evitar erros de ponto flutuante
+ const valorNormalizado = Math.floor(valor);
+
+ return { valido: true, valor: valorNormalizado };
+ }
+
  static async processSimulation(interaction, eventId) {
- try {
- console.log(`[LootSplit] Processing simulation for event: ${eventId}`);
+   try {
+   console.log(`[LootSplit] Processing simulation for event: ${eventId}`);
 
- const guildId = interaction.guild.id;
+   const guildId = interaction.guild.id;
 
- const valorTotal = parseInt(interaction.fields.getTextInputValue('valor_total'));
- const valorSacosInput = interaction.fields.getTextInputValue('valor_sacos');
- const valorReparoInput = interaction.fields.getTextInputValue('valor_reparo');
+   // OBTER valores do modal (strings)
+   const valorTotalInput = interaction.fields.getTextInputValue('valor_total');
+   const valorSacosInput = interaction.fields.getTextInputValue('valor_sacos');
+   const valorReparoInput = interaction.fields.getTextInputValue('valor_reparo');
 
- if (isNaN(valorTotal) || valorTotal <= 0) {
- return interaction.reply({
- content: '❌ Valor total inválido!',
- ephemeral: true
- });
- }
+   // ✅ APLICAR VALIDAÇÃO DE NÚMEROS SEGUROS
+   const valorTotal = parseInt(valorTotalInput, 10);
+   const valorSacosRaw = valorSacosInput ? parseInt(valorSacosInput, 10) : 0;
+   const valorReparoRaw = valorReparoInput ? parseInt(valorReparoInput, 10) : 0;
 
- const valorSacos = valorSacosInput ? parseInt(valorSacosInput) : 0;
- const valorReparo = valorReparoInput ? parseInt(valorReparoInput) : 0;
+   // Validação completa de segurança
+   const erros = [];
 
- if ((valorSacosInput && isNaN(valorSacos)) || (valorReparoInput && isNaN(valorReparo))) {
- return interaction.reply({
- content: '❌ Valores de sacos ou reparo inválidos!',
- ephemeral: true
- });
- }
+   // Validar valorTotal (obrigatório, não pode ser zero)
+   const validacaoTotal = this.validarValorFinanceiro(valorTotal, 'Valor Total', false);
+   if (!validacaoTotal.valido) {
+     erros.push(validacaoTotal.erro);
+   }
 
- let eventData = global.activeEvents.get(eventId);
- if (!eventData) {
- eventData = global.finishedEvents?.get(eventId);
- }
+   // Validar valorSacos (opcional, pode ser zero)
+   const validacaoSacos = this.validarValorFinanceiro(valorSacosRaw, 'Valor dos Sacos', true);
+   if (!validacaoSacos.valido) {
+     erros.push(validacaoSacos.erro);
+   }
 
- if (!eventData) {
- return interaction.reply({
- content: '❌ Evento não encontrado!',
- ephemeral: true
- });
- }
+   // Validar valorReparo (opcional, pode ser zero)
+   const validacaoReparo = this.validarValorFinanceiro(valorReparoRaw, 'Valor do Reparo', true);
+   if (!validacaoReparo.valido) {
+     erros.push(validacaoReparo.erro);
+   }
 
- // Verificar se é do mesmo servidor
- if (eventData.guildId && eventData.guildId !== guildId) {
- return interaction.reply({
- content: '❌ Este evento é de outro servidor!',
- ephemeral: true
- });
- }
+   // Se houver erros, retornar imediatamente
+   if (erros.length > 0) {
+     return interaction.reply({
+       content: erros.join('\n'),
+       ephemeral: true
+     });
+   }
 
- const config = global.guildConfig?.get(guildId) || {};
- const taxaGuilda = config.taxaGuilda || 10;
+   // Normalizar valores (remover casas decimais)
+   const valorSacos = validacaoSacos.valor;
+   const valorReparo = validacaoReparo.valor;
 
- // ✅ Calcular tempo total do evento
- let tempoTotalEvento = 0;
- if (eventData.inicioTimestamp && eventData.finalizadoEm) {
- tempoTotalEvento = eventData.finalizadoEm - eventData.inicioTimestamp;
- } else if (eventData.inicioTimestamp) {
- tempoTotalEvento = Date.now() - eventData.inicioTimestamp;
- }
+   // Validação lógica: Sacos + Reparo <= Valor Total
+   if ((valorSacos + valorReparo) > valorTotal) {
+     return interaction.reply({
+       content: `❌ O valor dos Sacos + Reparo (${(valorSacos + valorReparo).toLocaleString()}) não pode exceder o Valor Total (${valorTotal.toLocaleString()}).`,
+       ephemeral: true
+     });
+   }
 
- let tempoTotalParticipacao = 0;
- const participantes = Array.from(eventData.participantes.entries());
+   let eventData = global.activeEvents.get(eventId);
+   if (!eventData) {
+   eventData = global.finishedEvents?.get(eventId);
+   }
 
- participantes.forEach(([userId, data]) => {
- let tempo = data.tempoTotal || 0;
- if (!eventData.finalizadoEm && !data.pausado && data.tempoInicio && eventData.status === 'em_andamento') {
- tempo += Date.now() - data.tempoInicio;
- }
- tempoTotalParticipacao += tempo;
- });
+   if (!eventData) {
+   return interaction.reply({
+   content: '❌ Evento não encontrado!',
+   ephemeral: true
+   });
+   }
 
- if (tempoTotalParticipacao === 0) {
- tempoTotalParticipacao = tempoTotalEvento * participantes.length;
- }
+   // Verificar se é do mesmo servidor
+   if (eventData.guildId && eventData.guildId !== guildId) {
+   return interaction.reply({
+   content: '❌ Este evento é de outro servidor!',
+   ephemeral: true
+   });
+   }
 
- const valorBase = valorTotal + valorSacos - valorReparo;
- const valorTaxa = Math.floor(valorBase * (taxaGuilda / 100));
- const valorDistribuir = valorBase - valorTaxa;
+   const config = global.guildConfig?.get(guildId) || {};
+   const taxaGuilda = config.taxaGuilda || 10;
 
- const distribuicao = participantes.map(([userId, data]) => {
- let tempoParticipacao = data.tempoTotal || 0;
- if (!eventData.finalizadoEm && !data.pausado && data.tempoInicio && eventData.status === 'em_andamento') {
- tempoParticipacao += Date.now() - data.tempoInicio;
- }
+   // ⏱️ Calcular tempo total do evento
+   let tempoTotalEvento = 0;
+   if (eventData.inicioTimestamp && eventData.finalizadoEm) {
+   tempoTotalEvento = eventData.finalizadoEm - eventData.inicioTimestamp;
+   } else if (eventData.inicioTimestamp) {
+   tempoTotalEvento = Date.now() - eventData.inicioTimestamp;
+   }
 
- const percentagem = tempoTotalParticipacao > 0 ?
- (tempoParticipacao / tempoTotalParticipacao) :
- (1 / participantes.length);
+   let tempoTotalParticipacao = 0;
+   const participantes = Array.from(eventData.participantes.entries());
 
- const valorReceber = Math.floor(valorDistribuir * percentagem);
+   participantes.forEach(([userId, data]) => {
+   let tempo = data.tempoTotal || 0;
+   if (!eventData.finalizadoEm && !data.pausado && data.tempoInicio && eventData.status === 'em_andamento') {
+   tempo += Date.now() - data.tempoInicio;
+   }
+   tempoTotalParticipacao += tempo;
+   });
 
- return {
- userId,
- nick: data.nick,
- tempo: tempoParticipacao,
- percentagem: (percentagem * 100).toFixed(2),
- valor: valorReceber
- };
- });
+   if (tempoTotalParticipacao === 0) {
+   tempoTotalParticipacao = tempoTotalEvento * participantes.length;
+   }
 
- const simulationId = `sim_${Date.now()}_${eventId}`;
- const simulationData = {
- id: simulationId,
- eventId: eventId,
- guildId: guildId, // ✅ guildId para multi-servidor
- canalEventoId: interaction.channel.id,
- criadorId: interaction.user.id,
- valorTotal,
- valorSacos,
- valorReparo,
- valorTaxa,
- taxaGuilda,
- valorDistribuir,
- distribuicao,
- tempoTotalEvento: tempoTotalEvento,
- eventoNome: eventData.nome,
- status: 'simulado',
- timestamp: Date.now()
- };
+   const valorBase = valorTotal + valorSacos - valorReparo;
+   const valorTaxa = Math.floor(valorBase * (taxaGuilda / 100));
+   const valorDistribuir = valorBase - valorTaxa;
 
- if (!global.simulations) global.simulations = new Map();
- global.simulations.set(simulationId, simulationData);
+   const distribuicao = participantes.map(([userId, data]) => {
+   let tempoParticipacao = data.tempoTotal || 0;
+   if (!eventData.finalizadoEm && !data.pausado && data.tempoInicio && eventData.status === 'em_andamento') {
+   tempoParticipacao += Date.now() - data.tempoInicio;
+   }
 
- console.log(`[LootSplit] Simulation ${simulationId} created. Base: ${valorBase} (Guild: ${guildId})`);
+   const percentagem = tempoTotalParticipacao > 0 ?
+   (tempoParticipacao / tempoTotalParticipacao) :
+   (1 / participantes.length);
 
- const embed = this.createSimulationEmbed(simulationData, eventData);
+   const valorReceber = Math.floor(valorDistribuir * percentagem);
 
- const botoes = new ActionRowBuilder()
- .addComponents(
- new ButtonBuilder()
- .setCustomId(`loot_enviar_${simulationId}`)
- .setLabel('📤 Enviar para Financeiro')
- .setStyle(ButtonStyle.Success),
- new ButtonBuilder()
- .setCustomId(`loot_recalcular_${simulationId}`)
- .setLabel('🔄 Recalcular')
- .setStyle(ButtonStyle.Primary),
- new ButtonBuilder()
- .setCustomId(`loot_atualizar_part_${simulationId}`)
- .setLabel('⚙️ Atualizar Participação')
- .setStyle(ButtonStyle.Secondary)
- );
+   return {
+   userId,
+   nick: data.nick,
+   tempo: tempoParticipacao,
+   percentagem: (percentagem * 100).toFixed(2),
+   valor: valorReceber
+   };
+   });
 
- await interaction.reply({
- embeds: [embed],
- components: [botoes],
- ephemeral: false
- });
+   const simulationId = `sim_${Date.now()}_${eventId}`;
+   const simulationData = {
+   id: simulationId,
+   eventId: eventId,
+   guildId: guildId, // 💎 guildId para multi-servidor
+   canalEventoId: interaction.channel.id,
+   criadorId: interaction.user.id,
+   valorTotal,
+   valorSacos,
+   valorReparo,
+   valorTaxa,
+   taxaGuilda,
+   valorDistribuir,
+   distribuicao,
+   tempoTotalEvento: tempoTotalEvento,
+   eventoNome: eventData.nome,
+   status: 'simulado',
+   timestamp: Date.now()
+   };
 
- } catch (error) {
- console.error(`[LootSplit] Error processing simulation:`, error);
- await interaction.reply({
- content: '❌ Erro ao processar simulação. Verifique os valores informados.',
- ephemeral: true
- });
- }
+   if (!global.simulations) global.simulations = new Map();
+   global.simulations.set(simulationId, simulationData);
+
+   console.log(`[LootSplit] Simulation ${simulationId} created. Base: ${valorBase} (Guild: ${guildId})`);
+
+   const embed = this.createSimulationEmbed(simulationData, eventData);
+
+   const botoes = new ActionRowBuilder()
+   .addComponents(
+   new ButtonBuilder()
+   .setCustomId(`loot_enviar_${simulationId}`)
+   .setLabel('💰 Enviar para Financeiro')
+   .setStyle(ButtonStyle.Success),
+   new ButtonBuilder()
+   .setCustomId(`loot_recalcular_${simulationId}`)
+   .setLabel('🔄 Recalcular')
+   .setStyle(ButtonStyle.Primary),
+   new ButtonBuilder()
+   .setCustomId(`loot_atualizar_part_${simulationId}`)
+   .setLabel('👥 Atualizar Participação')
+   .setStyle(ButtonStyle.Secondary)
+   );
+
+   await interaction.reply({
+   embeds: [embed],
+   components: [botoes],
+   ephemeral: false
+   });
+
+   } catch (error) {
+   console.error(`[LootSplit] Error processing simulation:`, error);
+   await interaction.reply({
+   content: '❌ Erro ao processar simulação. Verifique os valores informados.',
+   ephemeral: true
+   });
+   }
  }
 
  static createSimulationEmbed(simulation, eventData) {
@@ -240,12 +312,12 @@ class LootSplitHandler {
  .setTitle('💰 SIMULAÇÃO DE DIVISÃO DE LOOT')
  .setDescription(
  `## ${eventData.nome || simulation.eventoNome}\n\n` +
- `**⏱️ Duração Total do Evento:** \`${tempoTotalFormatado}\`\n\n` +
- `**💎 Valor Base:** \`${simulation.valorTotal.toLocaleString()}\`\n` +
- `**🎒 Sacos (adicional):** \`${simulation.valorSacos.toLocaleString()}\`\n` +
- `**🔧 Reparo:** \`${simulation.valorReparo.toLocaleString()}\`\n` +
- `**📊 Taxa Guilda (${simulation.taxaGuilda}%):** \`${simulation.valorTaxa.toLocaleString()}\`\n` +
- `**💵 Valor a Distribuir:** \`${simulation.valorDistribuir.toLocaleString()}\``
+ `⏱️ **Duração Total do Evento:** \`${tempoTotalFormatado}\`\n\n` +
+ `💎 **Valor Base:** ${simulation.valorTotal.toLocaleString()}\n` +
+ `🎒 **Sacos (adicional):** ${simulation.valorSacos.toLocaleString()}\n` +
+ `🔧 **Reparo:** ${simulation.valorReparo.toLocaleString()}\n` +
+ `📊 **Taxa Guilda (${simulation.taxaGuilda}%):** ${simulation.valorTaxa.toLocaleString()}\n` +
+ `💰 **Valor a Distribuir:** ${simulation.valorDistribuir.toLocaleString()}`
  )
  .setColor(0xF1C40F)
  .setTimestamp();
@@ -258,17 +330,17 @@ class LootSplitHandler {
  }
  percentParticipacao = Math.min(percentParticipacao, 100);
 
- return `\`${p.nick}\`\n> 💰 **Valor:** \`${p.valor.toLocaleString()}\` | ⏱️ **Tempo:** \`${tempoFormatado}\` | 📊 **Participação:** \`${percentParticipacao.toFixed(1)}%\``;
+ return `\`${p.nick}\`\n> 💰 **Valor:** ${p.valor.toLocaleString()} | ⏱️ **Tempo:** ${tempoFormatado} | 📊 **Part:** ${percentParticipacao.toFixed(1)}%`;
  }).join('\n\n');
 
  embed.addFields({
- name: `👥 Participantes (${simulation.distribuicao.length}) - Participação baseada no tempo total`,
+ name: `👥 Participantes (${simulation.distribuicao.length}) - Divisão baseada no tempo`,
  value: listaParticipantes || 'Nenhum participante',
  inline: false
  });
 
  embed.setFooter({
- text: '💡 100% = Participou todo o evento | 50% = Participou metade do tempo | Formato: HH:MM:SS'
+ text: '100% = Participou todo o evento | 50% = Participou metade do tempo | Formato: HH:MM:SS'
  });
 
  return embed;
@@ -297,7 +369,7 @@ class LootSplitHandler {
  }
 
  const eventData = global.activeEvents.get(simulation.eventId) || global.finishedEvents?.get(simulation.eventId);
- const canalFinanceiro = interaction.guild.channels.cache.find(c => c.name === '📊╠financeiro');
+ const canalFinanceiro = interaction.guild.channels.cache.find(c => c.name === '💰financeiro');
 
  if (!canalFinanceiro) {
  return interaction.reply({
@@ -307,15 +379,15 @@ class LootSplitHandler {
  }
 
  const embedAprovacao = new EmbedBuilder()
- .setTitle('🔔 PAGAMENTO PENDENTE DE APROVAÇÃO')
+ .setTitle('⏳ PAGAMENTO PENDENTE DE APROVAÇÃO')
  .setDescription(
  `**Evento:** ${eventData?.nome || 'Desconhecido'}\n` +
  `**Servidor:** ${interaction.guild.name}\n` +
  `**Criador:** <@${simulation.criadorId}>\n` +
- `**Valor Total:** \`${simulation.valorTotal.toLocaleString()}\`\n` +
- `**Sacos:** \`${simulation.valorSacos.toLocaleString()}\`\n` +
- `**Taxa Guilda:** \`${simulation.valorTaxa.toLocaleString()}\`\n` +
- `**A Distribuir:** \`${simulation.valorDistribuir.toLocaleString()}\``
+ `**Valor Total:** ${simulation.valorTotal.toLocaleString()}\n` +
+ `**Sacos:** ${simulation.valorSacos.toLocaleString()}\n` +
+ `**Taxa Guilda:** ${simulation.valorTaxa.toLocaleString()}\n` +
+ `**A Distribuir:** ${simulation.valorDistribuir.toLocaleString()}`
  )
  .setColor(0xE74C3C)
  .setTimestamp();
@@ -340,7 +412,7 @@ class LootSplitHandler {
  if (staffRole) mentions += `<@&${staffRole.id}>`;
 
  await canalFinanceiro.send({
- content: mentions ? `🔔 ${mentions} Nova solicitação de pagamento!` : '🔔 Nova solicitação de pagamento!',
+ content: mentions ? `⏳ ${mentions} Nova solicitação de pagamento!` : '⏳ Nova solicitação de pagamento!',
  embeds: [embedAprovacao],
  components: [botoesAprovacao]
  });
@@ -426,7 +498,7 @@ class LootSplitHandler {
  });
  }
 
- // ✅ VERIFICAÇÃO CRÍTICA: Database inicializado?
+ // ⚠️ VERIFICAÇÃO CRÍTICA: Database inicializado?
  if (!Database.initialized) {
  console.error('[LootSplit] Database not initialized!');
  return interaction.reply({
@@ -464,7 +536,7 @@ class LootSplitHandler {
 
  // ✅ VERIFICAÇÃO DE EXISTÊNCIA do método
  if (typeof Database.addSaldo !== 'function') {
- throw new Error('Method Database.addSaldo not found');
+ throw new Error('Método Database.addSaldo not found');
  }
 
  // ✅ CHAMADA CONSISTENTE ao Database (guildId, userId, amount, reason)
@@ -490,14 +562,14 @@ class LootSplitHandler {
  const novoSaldo = await Database.getSaldo(guildId, participante.userId);
 
  const embed = new EmbedBuilder()
- .setTitle('💰 PAGAMENTO RECEBIDO')
+ .setTitle('💰 PAGAMENTO RECEBIDO!')
  .setDescription(
  `🎉 **Parabéns!** Você recebeu um pagamento!\n\n` +
- `\> **Valor:** \`${participante.valor.toLocaleString()}\`\n` +
- `\> **Evento:** ${simulation.eventoNome || simulation.eventId}\n` +
- `\> **Servidor:** ${interaction.guild.name}\n` +
- `\> **Data:** ${new Date().toLocaleString('pt-BR')}\n\n` +
- `💎 **Seu Novo Saldo:** \`${novoSaldo.toLocaleString()}\``
+ `> **Valor:** ${participante.valor.toLocaleString()}\n` +
+ `> **Evento:** ${simulation.eventoNome || simulation.eventId}\n` +
+ `> **Servidor:** ${interaction.guild.name}\n` +
+ `> **Data:** ${new Date().toLocaleString('pt-BR')}\n\n` +
+ `💎 **Seu Novo Saldo:** ${novoSaldo.toLocaleString()}`
  )
  .setColor(0x2ECC71)
  .setTimestamp();
@@ -507,13 +579,11 @@ class LootSplitHandler {
  });
  } catch (notifyError) {
  console.error(`[LootSplit] Error notifying ${participante.userId}:`, notifyError);
- // Não incrementa falhas aqui pois o pagamento já foi processado
  }
 
  } catch (error) {
  falhas++;
  console.error(`[LootSplit] Error processing payment for ${participante.userId}:`, error);
- // ✅ CONTINUA processando outros participantes em vez de quebrar o loop
  }
  }));
  }
@@ -551,8 +621,8 @@ class LootSplitHandler {
  .setTitle('✅ PAGAMENTO CONFIRMADO')
  .setDescription(
  `**Evento pago por:** <@${interaction.user.id}>\n` +
- `**Total distribuído:** \`${simulation.valorDistribuir.toLocaleString()}\`\n` +
- `**Taxa guilda:** \`${simulation.valorTaxa.toLocaleString()}\``
+ `**Total distribuído:** ${simulation.valorDistribuir.toLocaleString()}\n` +
+ `**Taxa guilda:** ${simulation.valorTaxa.toLocaleString()}`
  )
  .setColor(0x2ECC71)
  .setTimestamp();
@@ -571,7 +641,7 @@ class LootSplitHandler {
  });
  }
 
- const canalLogs = interaction.guild.channels.cache.find(c => c.name === '📜╠logs-banco');
+ const canalLogs = interaction.guild.channels.cache.find(c => c.name === 'logs-banco');
  if (canalLogs) {
  await canalLogs.send({
  embeds: [
@@ -581,8 +651,8 @@ class LootSplitHandler {
  `**Evento:** ${simulation.eventId}\n` +
  `**Servidor:** ${interaction.guild.name}\n` +
  `**Aprovado por:** <@${interaction.user.id}>\n` +
- `**Valor Total:** \`${simulation.valorTotal.toLocaleString()}\`\n` +
- `**Sacos:** \`${simulation.valorSacos.toLocaleString()}\`\n` +
+ `**Valor Total:** ${simulation.valorTotal.toLocaleString()}\n` +
+ `**Sacos:** ${simulation.valorSacos.toLocaleString()}\n` +
  `**Participantes:** ${simulation.distribuicao.length}\n` +
  `**Sucessos:** ${sucessos}\n` +
  `**Falhas:** ${falhas}\n` +
@@ -632,12 +702,12 @@ class LootSplitHandler {
  eventData?.tipo === 'raid_avalon';
 
  const xpRate = isRaidAvalon ? this.XP_RATES.RAID_AVALON : this.XP_RATES.EVENTO_NORMAL;
- const eventoTipo = isRaidAvalon ? '🔥 RAID AVALON' : '⚔️ Evento Normal';
+ const eventoTipo = isRaidAvalon ? '🔥 RAID AVALON' : '⏱️ Evento Normal';
 
  console.log(`[LootSplit] Archiving ${eventoTipo} - XP Rate: ${xpRate} XP/min`);
 
  let totalXpDistribuido = 0;
- const canalLogXp = interaction.guild.channels.cache.find(c => c.name === '📜╠log-xp');
+ const canalLogXp = interaction.guild.channels.cache.find(c => c.name === 'log-xp');
 
  if (simulation.distribuicao && simulation.distribuicao.length > 0) {
  console.log(`[LootSplit] Distributing XP to ${simulation.distribuicao.length} participants...`);
@@ -664,12 +734,12 @@ class LootSplitHandler {
  .setTitle('🎉 XP RECEBIDO POR PARTICIPAÇÃO')
  .setDescription(
  `✨ **Você ganhou XP por participar de um evento!**\n\n` +
- `📅 **Evento:** ${eventoTipo}\n` +
+ `🏷️ **Evento:** ${eventoTipo}\n` +
  `⏱️ **Tempo Participado:** ${this.formatTime(participante.tempo || 0)}\n` +
- `💎 **XP Ganho:** \`${xpGanho.toLocaleString()} XP\`\n` +
- `📈 **Taxa:** ${xpRate} XP/minuto\n` +
- `🏰 **Servidor:** ${interaction.guild.name}\n\n` +
- `🎊 Continue participando dos eventos da guilda para subir de nível!`
+ `💎 **XP Ganho:** ${xpGanho.toLocaleString()} XP\n` +
+ `📊 **Taxa:** ${xpRate} XP/minuto\n` +
+ `🌐 **Servidor:** ${interaction.guild.name}\n\n` +
+ `✨ Continue participando dos eventos da guilda para subir de nível!`
  )
  .setColor(isRaidAvalon ? 0x9B59B6 : 0x2ECC71)
  .setTimestamp();
@@ -716,13 +786,13 @@ class LootSplitHandler {
  .setTitle('📁 EVENTO ARQUIVADO')
  .setDescription(
  `✅ **Evento arquivado com sucesso!**\n\n` +
- `🏷️ **Tipo:** ${eventoTipo}\n` +
- `🏰 **Servidor:** ${interaction.guild.name}\n` +
+ `⏱️ **Tipo:** ${eventoTipo}\n` +
+ `🌐 **Servidor:** ${interaction.guild.name}\n` +
  `👥 **Participantes:** ${simulation.distribuicao?.length || 0}\n` +
- `💰 **Valor Total:** \`${(simulation.valorTotal || 0).toLocaleString()}\`\n` +
- `💎 **XP Total Distribuído:** \`${totalXpDistribuido.toLocaleString()} XP\`\n` +
- `📈 **Taxa XP:** ${xpRate} XP/minuto\n` +
- `👤 **Arquivado por:** <@${interaction.user.id}>`
+ `💰 **Valor Total:** ${(simulation.valorTotal || 0).toLocaleString()}\n` +
+ `💎 **XP Total Distribuído:** ${totalXpDistribuido.toLocaleString()} XP\n` +
+ `📊 **Taxa XP:** ${xpRate} XP/minuto\n` +
+ `🏷️ **Arquivado por:** <@${interaction.user.id}>`
  )
  .setColor(isRaidAvalon ? 0x9B59B6 : 0x3498DB)
  .setTimestamp();
@@ -745,7 +815,7 @@ class LootSplitHandler {
  }, 10000);
  }
 
- const canalLogs = interaction.guild.channels.cache.find(c => c.name === '📜╠logs-banco');
+ const canalLogs = interaction.guild.channels.cache.find(c => c.name === 'logs-banco');
  if (canalLogs) {
  await canalLogs.send({
  embeds: [
@@ -756,7 +826,7 @@ class LootSplitHandler {
  `**Tipo:** ${eventoTipo}\n` +
  `**Servidor:** ${interaction.guild.name}\n` +
  `**Arquivado por:** <@${interaction.user.id}>\n` +
- `**XP Distribuído:** \`${totalXpDistribuido.toLocaleString()} XP\`\n` +
+ `**XP Distribuído:** ${totalXpDistribuido.toLocaleString()} XP\n` +
  `**Taxa:** ${xpRate} XP/min\n` +
  `**Data:** ${new Date().toLocaleString()}`
  )

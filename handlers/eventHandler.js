@@ -1,15 +1,16 @@
 /**
  * eventHandler.js - Gerenciamento de Eventos Albion Online
  * 
- * VERSÃO CORRIGIDA - Timezone UTC Consistente
+ * VERSÃO CORRIGIDA - Timezone UTC + Proteção contra Crash em Canal Deletado
  * Compatível com database.js (timezone UTC)
  * 
  * REGRAS APLICADAS:
  * 1. Todos os timestamps via Database.getCurrentTimestamp() (UTC ms)
- * 2. Validação de estado em transições (scheduled->active->paused->ended)
- * 3. Limpeza de recursos (intervals, coleções) em finally blocks
- * 4. Locks para prevenir race conditions em botões simultâneos
- * 5. Logs de debug detalhados em todas as operações críticas
+ * 2. Locks para prevenir race conditions em botões simultâneos
+ * 3. Validação de estado em transições (scheduled->active->paused->ended)
+ * 4. Limpeza de recursos (intervals, coleções) em finally blocks
+ * 5. CRITICAL FIX: handleFinalizar verifica se canal existe antes de deletar
+ * 6. Try-catch em todas as operações de Discord API (canais, cargos, movimentação)
  */
 
 const { 
@@ -40,7 +41,7 @@ const EVENT_CONFIG = {
   MAX_DURATION: 8 * 60 * 60 * 1000, // 8 horas máximo
   DEFAULT_DURATION: 60 * 60 * 1000,   // 1 hora padrão
   CHECK_INTERVAL: 30 * 1000,          // 30s check de voice
-  LOCK_TIMEOUT: 5000                   // 5s timeout para locks
+  LOCK_TIMEOUT: 10000                 // 10s timeout para locks
 };
 
 /**
@@ -60,7 +61,10 @@ class EventHandler {
     // Map<eventId, Promise> - Locks para operações atômicas
     this.operationLocks = new Map();
 
-    console.log('[EventHandler] Inicializado com timezone UTC');
+    // Map<eventId, processingUserId> - Track quem está processando
+    this.processingEvents = new Map();
+
+    console.log('[EventHandler] Inicializado com timezone UTC e proteção contra crash');
   }
 
   /**
@@ -72,17 +76,43 @@ class EventHandler {
 
   /**
    * Sistema de locking para operações atômicas (prevenir race conditions)
+   * TIMEOUT: 10s para operações de finalização (mais seguro)
    */
   async acquireLock(eventId) {
     const startTime = this.getTimestamp();
+    const timeout = EVENT_CONFIG.LOCK_TIMEOUT;
+
     while (this.operationLocks.has(eventId)) {
-      if (this.getTimestamp() - startTime > EVENT_CONFIG.LOCK_TIMEOUT) {
+      if (this.getTimestamp() - startTime > timeout) {
         throw new Error(`Timeout acquiring lock for event ${eventId}`);
       }
       await new Promise(resolve => setTimeout(resolve, 100));
     }
+
     this.operationLocks.set(eventId, true);
     return () => this.operationLocks.delete(eventId);
+  }
+
+  /**
+   * Marca evento como em processamento (evita duplo clique)
+   */
+  markAsProcessing(eventId, userId) {
+    this.processingEvents.set(eventId, userId);
+  }
+
+  /**
+   * Remove marcação de processamento
+   */
+  unmarkProcessing(eventId) {
+    this.processingEvents.delete(eventId);
+  }
+
+  /**
+   * Verifica se outro usuário está processando este evento
+   */
+  isBeingProcessedByAnother(eventId, userId) {
+    const processingBy = this.processingEvents.get(eventId);
+    return processingBy && processingBy !== userId;
   }
 
   /**
@@ -91,7 +121,6 @@ class EventHandler {
   checkAdminPermissions(interaction, eventData) {
     const member = interaction.member;
 
-    // Verifica se é administrador ou criador do evento
     const isAdmin = member.permissions.has(PermissionFlagsBits.Administrator) || 
                    member.permissions.has(PermissionFlagsBits.ManageGuild);
     const isCreator = member.id === eventData.creatorId;
@@ -119,9 +148,28 @@ class EventHandler {
     return allowed.includes(newStatus);
   }
 
-  // ============================================================================
-  // CRIAÇÃO DE EVENTOS
-  // ============================================================================
+  /**
+   * Busca evento ativo por ID
+   */
+  getEvent(eventId) {
+    return this.activeEvents.get(eventId);
+  }
+
+  /**
+   * Lista eventos ativos de uma guilda
+   */
+  getGuildActiveEvents(guildId) {
+    const events = [];
+    for (const [eventId, eventData] of this.activeEvents) {
+      if (eventData.guildId === guildId && 
+          (eventData.status === EVENT_STATUS.SCHEDULED || 
+           eventData.status === EVENT_STATUS.ACTIVE || 
+           eventData.status === EVENT_STATUS.PAUSED)) {
+        events.push({ id: eventId, ...eventData });
+      }
+    }
+    return events.sort((a, b) => a.scheduledAt - b.scheduledAt);
+  }
 
   /**
    * Cria um novo evento
@@ -187,11 +235,11 @@ class EventHandler {
         valorTotal: eventData.valorTotal,
         taxaGuilda: eventData.taxaGuilda,
         participantes: new Map(),
-        inicioTimestamp: null, // Será definido no start
+        inicioTimestamp: null,
         finalizadoEm: null
       });
 
-      // Registra no log de auditoria
+      // Log de auditoria
       await Database.logAudit(interaction.guild.id, 'EVENT_CREATED', interaction.user.id, {
         eventId,
         nome: eventData.nome,
@@ -225,18 +273,23 @@ class EventHandler {
     }
   }
 
-  // ============================================================================
-  // CONTROLE DE EVENTOS (START/PAUSE/RESUME/END)
-  // ============================================================================
-
   /**
    * Inicia um evento agendado
    */
-  async startEvent(interaction, eventId) {
+  async handleIniciar(interaction, eventId) {
     const releaseLock = await this.acquireLock(eventId);
 
     try {
-      console.log(`[startEvent] Usuário ${interaction.user.id} iniciando evento ${eventId}`);
+      if (this.isBeingProcessedByAnother(eventId, interaction.user.id)) {
+        return interaction.reply({
+          content: '⚠️ Outro usuário já está processando este evento. Aguarde.',
+          ephemeral: true
+        });
+      }
+
+      this.markAsProcessing(eventId, interaction.user.id);
+      console.log(`[handleIniciar] Usuário ${interaction.user.id} iniciando evento ${eventId}`);
+
       await interaction.deferReply({ ephemeral: false });
 
       const eventData = this.activeEvents.get(eventId);
@@ -290,20 +343,20 @@ class EventHandler {
         startedAtISO: Database.timestampToISO(now)
       });
 
-      console.log(`[startEvent] Evento ${eventId} iniciado em ${Database.timestampToISO(now)}`);
+      console.log(`[handleIniciar] Evento ${eventId} iniciado em ${Database.timestampToISO(now)}`);
 
       await interaction.editReply({
         content: `🚀 Evento **${eventData.nome}** foi iniciado!\n⏰ Início: <t:${Math.floor(now/1000)}:T>`
       });
 
     } catch (error) {
-      console.error(`[startEvent] Erro no evento ${eventId}:`, error);
+      console.error(`[handleIniciar] Erro no evento ${eventId}:`, error);
       await interaction.editReply({
         content: `❌ Erro ao iniciar evento: ${error.message}`,
         ephemeral: true
       }).catch(console.error);
-      throw error;
     } finally {
+      this.unmarkProcessing(eventId);
       releaseLock();
     }
   }
@@ -311,11 +364,20 @@ class EventHandler {
   /**
    * Pausa um evento ativo
    */
-  async pauseEvent(interaction, eventId) {
+  async handlePausar(interaction, eventId) {
     const releaseLock = await this.acquireLock(eventId);
 
     try {
-      console.log(`[pauseEvent] Usuário ${interaction.user.id} pausando evento ${eventId}`);
+      if (this.isBeingProcessedByAnother(eventId, interaction.user.id)) {
+        return interaction.reply({
+          content: '⚠️ Outro usuário já está processando este evento.',
+          ephemeral: true
+        });
+      }
+
+      this.markAsProcessing(eventId, interaction.user.id);
+      console.log(`[handlePausar] Usuário ${interaction.user.id} pausando evento ${eventId}`);
+
       await interaction.deferReply({ ephemeral: true });
 
       const eventData = this.activeEvents.get(eventId);
@@ -353,13 +415,13 @@ class EventHandler {
       });
 
     } catch (error) {
-      console.error(`[pauseEvent] Erro:`, error);
+      console.error(`[handlePausar] Erro:`, error);
       await interaction.editReply({
         content: `❌ Erro: ${error.message}`,
         ephemeral: true
       });
-      throw error;
     } finally {
+      this.unmarkProcessing(eventId);
       releaseLock();
     }
   }
@@ -367,11 +429,20 @@ class EventHandler {
   /**
    * Retoma um evento pausado
    */
-  async resumeEvent(interaction, eventId) {
+  async handleRetomar(interaction, eventId) {
     const releaseLock = await this.acquireLock(eventId);
 
     try {
-      console.log(`[resumeEvent] Usuário ${interaction.user.id} retomando evento ${eventId}`);
+      if (this.isBeingProcessedByAnother(eventId, interaction.user.id)) {
+        return interaction.reply({
+          content: '⚠️ Outro usuário já está processando este evento.',
+          ephemeral: true
+        });
+      }
+
+      this.markAsProcessing(eventId, interaction.user.id);
+      console.log(`[handleRetomar] Usuário ${interaction.user.id} retomando evento ${eventId}`);
+
       await interaction.deferReply({ ephemeral: true });
 
       const eventData = this.activeEvents.get(eventId);
@@ -414,32 +485,45 @@ class EventHandler {
       });
 
     } catch (error) {
-      console.error(`[resumeEvent] Erro:`, error);
+      console.error(`[handleRetomar] Erro:`, error);
       await interaction.editReply({
         content: `❌ Erro: ${error.message}`,
         ephemeral: true
       });
-      throw error;
     } finally {
+      this.unmarkProcessing(eventId);
       releaseLock();
     }
   }
 
   /**
-   * Finaliza um evento
+   * Finaliza um evento (VERSÃO CORRIGIDA - proteção contra canal já deletado)
+   * CRITICAL FIX: Verifica se canal de voz existe antes de tentar deletar
    */
-  async endEvent(interaction, eventId) {
+  async handleFinalizar(interaction, eventId) {
     const releaseLock = await this.acquireLock(eventId);
 
     try {
-      console.log(`[endEvent] Usuário ${interaction.user.id} finalizando evento ${eventId}`);
+      if (this.isBeingProcessedByAnother(eventId, interaction.user.id)) {
+        return interaction.reply({
+          content: '⚠️ Outro usuário já está finalizando este evento. Aguarde.',
+          ephemeral: true
+        });
+      }
+
+      this.markAsProcessing(eventId, interaction.user.id);
+      console.log(`[handleFinalizar] Usuário ${interaction.user.id} finalizando evento ${eventId}`);
+
       await interaction.deferReply({ ephemeral: false });
 
       const eventData = this.activeEvents.get(eventId);
       if (!eventData) throw new Error('Evento não encontrado');
 
       if (!this.checkAdminPermissions(interaction, eventData)) {
-        return interaction.editReply({ content: '❌ Sem permissão.', ephemeral: true });
+        return interaction.editReply({ 
+          content: '❌ Sem permissão para finalizar.', 
+          ephemeral: true 
+        });
       }
 
       if (!this.validateStateTransition(eventData.status, EVENT_STATUS.ENDED)) {
@@ -450,7 +534,6 @@ class EventHandler {
 
       // Calcula estatísticas finais
       const totalDuration = now - eventData.startedAt - (eventData.totalPausedTime || 0);
-      const participantStats = await this.calculateFinalStats(eventData);
 
       eventData.status = EVENT_STATUS.ENDED;
       eventData.endedAt = now;
@@ -458,7 +541,85 @@ class EventHandler {
       // Para monitoramento
       this.stopVoiceMonitoring(eventId);
 
-      // Atualiza no banco
+      // ========== OPERAÇÕES DE CANAL COM PROTEÇÃO ==========
+
+      // Busca canal de aguardo (se existir)
+      let canalAguardando = null;
+      try {
+        canalAguardando = interaction.guild.channels.cache.find(
+          c => c.name === '🔊╠Aguardando-Evento'
+        );
+      } catch (e) {
+        console.log('[handleFinalizar] Canal de aguardo não encontrado');
+      }
+
+      // CORREÇÃO CRÍTICA: Verifica se canalVoz existe antes de tentar usar
+      let canalVoz = null;
+      let canalVozDeletado = false;
+
+      if (eventData.voiceChannelId) {
+        try {
+          // Tenta buscar o canal (pode falhar se já foi deletado)
+          canalVoz = await interaction.guild.channels.fetch(eventData.voiceChannelId);
+        } catch (fetchError) {
+          // Código 10003 = Unknown Channel (já deletado)
+          if (fetchError.code === 10003) {
+            console.log(`[handleFinalizar] Canal de voz ${eventData.voiceChannelId} já estava deletado (10003)`);
+            canalVozDeletado = true;
+          } else {
+            console.error(`[handleFinalizar] Erro ao buscar canal: ${fetchError.message}`);
+            canalVozDeletado = true;
+          }
+          canalVoz = null;
+        }
+      }
+
+      // Se tem canal de voz válido, tenta mover membros
+      if (canalVoz) {
+        console.log(`[handleFinalizar] Movendo membros do canal ${canalVoz.id}`);
+
+        for (const [userId, participant] of eventData.participantes) {
+          try {
+            const member = await interaction.guild.members.fetch(userId).catch(() => null);
+
+            // Só move se estiver no canal específico do evento
+            if (member?.voice?.channelId === canalVoz.id) {
+              if (canalAguardando) {
+                await member.voice.setChannel(canalAguardando.id);
+                console.log(`[handleFinalizar] Movido ${userId} para Aguardando-Evento`);
+              } else {
+                // Desconecta se não tem canal de aguardo
+                await member.voice.disconnect();
+                console.log(`[handleFinalizar] Desconectado ${userId} (sem canal de aguardo)`);
+              }
+            }
+          } catch (moveError) {
+            // Não crasha se não conseguir mover um membro específico
+            console.log(`[handleFinalizar] Não foi possível mover/desconectar ${userId}: ${moveError.message}`);
+            continue;
+          }
+        }
+
+        // CORREÇÃO CRÍTICA: Tenta deletar canal com try-catch específico
+        try {
+          await canalVoz.delete('Evento finalizado');
+          console.log(`[handleFinalizar] Canal de voz ${canalVoz.id} deletado com sucesso`);
+          canalVozDeletado = true;
+        } catch (deleteError) {
+          // Se já foi deletado manualmente ou por outro processo, apenas loga
+          if (deleteError.code === 10003) { // Unknown Channel
+            console.log(`[handleFinalizar] Canal de voz já estava deletado manualmente (10003)`);
+            canalVozDeletado = true;
+          } else {
+            console.error(`[handleFinalizar] Erro ao deletar canal: ${deleteError.message}`);
+            // NÃO JOGA O ERRO - continua execução
+          }
+        }
+      } else if (!canalVozDeletado) {
+        console.log(`[handleFinalizar] Sem canal de voz configurado para este evento`);
+      }
+
+      // Atualiza no banco (mesmo se canal já foi deletado)
       await Database.saveEvent(interaction.guild.id, {
         ...eventData,
         status: EVENT_STATUS.ENDED,
@@ -479,60 +640,76 @@ class EventHandler {
             tempoConectado: data.timeConnected,
             checkin: data.checkinAt
           })),
-          estatisticas: participantStats
+          canalVozDeletado: canalVozDeletado,
+          canalVozExisted: !!eventData.voiceChannelId
         }
       });
 
+      // Log de auditoria
       await Database.logAudit(interaction.guild.id, 'EVENT_ENDED', interaction.user.id, {
         eventId,
         duration: totalDuration,
-        participants: eventData.participantes.size
+        participants: eventData.participantes.size,
+        canalVozDeletado: canalVozDeletado
       });
 
-      // Cleanup de memória (mantém por 1 hora para consultas, depois remove)
+      // Cleanup de memória (mantém por 1 hora para consultas)
       setTimeout(() => {
         this.activeEvents.delete(eventId);
         this.voiceParticipants.delete(eventId);
         console.log(`[Cleanup] Evento ${eventId} removido da memória`);
       }, 60 * 60 * 1000);
 
+      // Resposta de sucesso (informa status do canal)
       const embed = new EmbedBuilder()
         .setTitle('🏁 Evento Finalizado')
         .setDescription(`**${eventData.nome}** foi encerrado.`)
         .addFields(
-          { name: '⏱️ Duração Total', value: this.formatDuration(totalDuration), inline: true },
-          { name: '👥 Participantes', value: `${eventData.participantes.size}`, inline: true },
-          { name: '💰 Valor Total', value: `${eventData.valorTotal}`, inline: true }
+          { 
+            name: '⏱️ Duração Total', 
+            value: this.formatDuration(totalDuration), 
+            inline: true 
+          },
+          { 
+            name: '👥 Participantes', 
+            value: `${eventData.participantes.size}`, 
+            inline: true 
+          },
+          { 
+            name: '🔊 Canal de Voz', 
+            value: canalVozDeletado ? 
+              (canalVoz ? '✅ Deletado automaticamente' : 'ℹ️ Já estava deletado') : 
+              'Não configurado', 
+            inline: true 
+          }
         )
         .setTimestamp(now)
         .setColor(0x00FF00);
 
       await interaction.editReply({ embeds: [embed] });
 
+      console.log(`[handleFinalizar] Evento ${eventId} finalizado com sucesso`);
+
     } catch (error) {
-      console.error(`[endEvent] Erro:`, error);
+      console.error(`[handleFinalizar] Erro:`, error);
       await interaction.editReply({
         content: `❌ Erro ao finalizar evento: ${error.message}`,
         ephemeral: true
-      });
-      throw error;
+      }).catch(console.error);
     } finally {
+      this.unmarkProcessing(eventId);
       releaseLock();
     }
   }
 
-  // ============================================================================
-  // PARTICIPAÇÃO E MONITORAMENTO DE VOZ
-  // ============================================================================
-
   /**
    * Usuário entra no evento (botão participar)
    */
-  async joinEvent(interaction, eventId) {
+  async handleParticipar(interaction, eventId) {
     const releaseLock = await this.acquireLock(eventId);
 
     try {
-      console.log(`[joinEvent] Usuário ${interaction.user.id} entrando no evento ${eventId}`);
+      console.log(`[handleParticipar] Usuário ${interaction.user.id} entrando no evento ${eventId}`);
 
       const eventData = this.activeEvents.get(eventId);
       if (!eventData) throw new Error('Evento não encontrado');
@@ -566,7 +743,7 @@ class EventHandler {
         if (member.voice.channelId === eventData.voiceChannelId) {
           const participant = eventData.participantes.get(userId);
           participant.lastJoinVoice = now;
-          console.log(`[joinEvent] Usuário ${userId} já está no voice, iniciando contagem`);
+          console.log(`[handleParticipar] Usuário ${userId} já está no voice, iniciando contagem`);
         }
       }
 
@@ -576,65 +753,11 @@ class EventHandler {
       });
 
     } catch (error) {
-      console.error(`[joinEvent] Erro:`, error);
+      console.error(`[handleParticipar] Erro:`, error);
       await interaction.reply({
         content: `❌ Erro: ${error.message}`,
         ephemeral: true
       }).catch(console.error);
-      throw error;
-    } finally {
-      releaseLock();
-    }
-  }
-
-  /**
-   * Usuário sai do evento
-   */
-  async leaveEvent(interaction, eventId) {
-    const releaseLock = await this.acquireLock(eventId);
-
-    try {
-      console.log(`[leaveEvent] Usuário ${interaction.user.id} saindo do evento ${eventId}`);
-
-      const eventData = this.activeEvents.get(eventId);
-      if (!eventData) throw new Error('Evento não encontrado');
-
-      const userId = interaction.user.id;
-      const now = this.getTimestamp();
-
-      if (!eventData.participantes.has(userId)) {
-        return interaction.reply({
-          content: '⚠️ Você não está participando deste evento.',
-          ephemeral: true
-        });
-      }
-
-      const participant = eventData.participantes.get(userId);
-
-      // Se estava no voice, calcula tempo final
-      if (participant.lastJoinVoice && eventData.status === EVENT_STATUS.ACTIVE) {
-        const sessionTime = now - participant.lastJoinVoice;
-        participant.timeConnected = (participant.timeConnected || 0) + sessionTime;
-        participant.lastJoinVoice = null;
-
-        console.log(`[leaveEvent] Usuário ${userId} saiu. Sessão: ${sessionTime}ms, Total: ${participant.timeConnected}ms`);
-      }
-
-      // Remove dos participantes ativos (mas mantém no histórico se necessário)
-      // Aqui poderíamos mover para uma lista de "participantes que saíram" se necessário
-
-      await interaction.reply({
-        content: `👋 Você saiu do evento **${eventData.nome}**.\n⏱️ Tempo total conectado: ${this.formatDuration(participant.timeConnected || 0)}`,
-        ephemeral: true
-      });
-
-    } catch (error) {
-      console.error(`[leaveEvent] Erro:`, error);
-      await interaction.reply({
-        content: `❌ Erro: ${error.message}`,
-        ephemeral: true
-      }).catch(console.error);
-      throw error;
     } finally {
       releaseLock();
     }
@@ -646,6 +769,7 @@ class EventHandler {
   handleVoiceStateUpdate(oldState, newState) {
     const userId = oldState.member.id;
     const guildId = oldState.guild.id;
+    const now = this.getTimestamp();
 
     // Verifica todos os eventos ativos desta guilda
     for (const [eventId, eventData] of this.activeEvents) {
@@ -656,7 +780,6 @@ class EventHandler {
       const isTargetChannel = eventData.voiceChannelId;
       const wasInChannel = oldState.channelId === isTargetChannel;
       const isInChannel = newState.channelId === isTargetChannel;
-      const now = this.getTimestamp();
 
       // Entrou no canal do evento
       if (!wasInChannel && isInChannel) {
@@ -712,7 +835,12 @@ class EventHandler {
         if (!guild) return;
 
         const channel = await guild.channels.fetch(channelId).catch(() => null);
-        if (!channel) return;
+        if (!channel) {
+          // Canal foi deletado durante o evento, para monitoramento
+          console.log(`[Monitor] Canal ${channelId} deletado, parando monitoramento`);
+          this.stopVoiceMonitoring(eventId);
+          return;
+        }
 
         const now = this.getTimestamp();
 
@@ -747,10 +875,6 @@ class EventHandler {
       console.log(`[Monitor] Monitoramento do evento ${eventId} encerrado`);
     }
   }
-
-  // ============================================================================
-  // CÁLCULOS E ESTATÍSTICAS
-  // ============================================================================
 
   /**
    * Calcula estatísticas finais do evento
@@ -802,44 +926,42 @@ class EventHandler {
     return `${seconds}s`;
   }
 
-  // ============================================================================
-  // CONSULTAS E UTILIDADES
-  // ============================================================================
-
   /**
-   * Obtém evento ativo por ID
+   * Atualiza painel do evento na mensagem original
    */
-  getEvent(eventId) {
-    return this.activeEvents.get(eventId);
-  }
+  async updateEventPanel(interaction, eventData) {
+    try {
+      const guildId = interaction.guild.id;
 
-  /**
-   * Lista eventos ativos de uma guilda
-   */
-  getGuildActiveEvents(guildId) {
-    const events = [];
-    for (const [eventId, eventData] of this.activeEvents) {
-      if (eventData.guildId === guildId && 
-          (eventData.status === EVENT_STATUS.SCHEDULED || 
-           eventData.status === EVENT_STATUS.ACTIVE || 
-           eventData.status === EVENT_STATUS.PAUSED)) {
-        events.push({ id: eventId, ...eventData });
+      // Verificar se é do mesmo servidor
+      if (eventData.guildId && eventData.guildId !== guildId) {
+        console.error('[updateEventPanel] Tentativa de atualizar evento de outro servidor');
+        return;
       }
-    }
-    return events.sort((a, b) => a.scheduledAt - b.scheduledAt);
-  }
 
-  /**
-   * Verifica se usuário está em algum evento ativo da guilda
-   */
-  async checkUserInAnyEvent(guildId, userId) {
-    const activeEvents = this.getGuildActiveEvents(guildId);
-    for (const event of activeEvents) {
-      if (event.participantes.has(userId)) {
-        return event;
-      }
+      const canal = interaction.guild.channels.cache.get(eventData.canalTextoId);
+      if (!canal) return;
+
+      const msg = await canal.messages.fetch(eventData.messageId).catch(() => null);
+      if (!msg) return;
+
+      // Recriar embed atualizado
+      const embed = new EmbedBuilder()
+        .setTitle(`${eventData.status === 'active' ? '🔴' : '⏳'} ${eventData.nome}`)
+        .setDescription(eventData.descricao || 'Sem descrição')
+        .addFields(
+          { name: 'Status', value: eventData.status.toUpperCase(), inline: true },
+          { name: 'Participantes', value: `${eventData.participantes.size}`, inline: true }
+        )
+        .setColor(eventData.status === 'active' ? 0x00FF00 : 0xFFA500)
+        .setTimestamp(this.getTimestamp());
+
+      // Aqui você pode adicionar botões atualizados se necessário
+      await msg.edit({ embeds: [embed] });
+
+    } catch (error) {
+      console.error(`[updateEventPanel] Erro:`, error);
     }
-    return null;
   }
 
   /**
@@ -857,6 +979,7 @@ class EventHandler {
     this.activeEvents.clear();
     this.voiceParticipants.clear();
     this.operationLocks.clear();
+    this.processingEvents.clear();
 
     console.log('[EventHandler] Cleanup concluído');
   }

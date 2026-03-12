@@ -16,7 +16,7 @@ const {
 const fs = require('fs');
 require('dotenv').config();
 
-// ==================== IMPORTAR HANDLERS ====================
+// ========== IMPORTAR HANDLERS ==========
 const RegistrationModal = require('./handlers/registrationModal');
 const RegistrationActions = require('./handlers/registrationActions');
 const ConfigActions = require('./handlers/configActions');
@@ -34,10 +34,10 @@ const XpHandler = require('./handlers/xpHandler');
 const XpEventHandler = require('./handlers/xpEventHandler');
 const RaidAvalonHandler = require('./handlers/raidAvalonHandler');
 const KillboardHandler = require('./handlers/killboardHandler');
-const MarketHandler = require('./handlers/marketHandler'); // 🛒 NOVO
-const MarketApi = require('./handlers/albionMarketApi'); // 🛒 NOVO
+const MarketHandler = require('./handlers/marketHandler'); // 🆕 NOVO
+const MarketApi = require('./handlers/albionMarketApi'); // 🆕 NOVO
 
-// ==================== IMPORTAR COMANDOS ====================
+// ========== IMPORTAR COMANDOS ==========
 const instalarCommand = require('./commands/instalar');
 const desistalarCommand = require('./commands/desistalar');
 const atualizarCommand = require('./commands/atualizar');
@@ -74,7 +74,7 @@ client.commands.set(limparXpCommand.data.name, limparXpCommand);
 client.commands.set(ajudaCommand.data.name, ajudaCommand);
 client.commands.set(killboardCommand.data.name, killboardCommand);
 
-// ==================== INICIALIZAR VARIÁVEIS GLOBAIS ====================
+// ========== INICIALIZAR VARIÁVEIS GLOBAIS ==========
 global.registrosPendentes = new Map();
 global.registroTemp = new Map();
 global.guildConfig = new Map();
@@ -96,10 +96,10 @@ global.pendingBauSales = new Map();
 global.client = client;
 global.xpDepositTemp = new Map();
 global.killboardProcessedEvents = new Map();
-global.marketSearches = new Map(); // 🛒 NOVO: Armazenar buscas de mercado
-global.depositTemp = new Map(); // 💵 NOVO: Temporários para sistema de depósito direto
+global.marketSearches = new Map(); // 🆕 NOVO: Armazenar buscas de mercado
+global.depositTemp = new Map(); // 🆕 NOVO: Temporários para sistema de depósito direto
 
-// Carregar dados persistidos (blacklist e histórico)
+// Carregar dados persistentes (blacklist e histórico)
 try {
  if (!fs.existsSync('./data')) {
  fs.mkdirSync('./data', { recursive: true });
@@ -108,7 +108,7 @@ try {
  if (fs.existsSync('./data/blacklist.json')) {
  const blacklistData = JSON.parse(fs.readFileSync('./data/blacklist.json', 'utf8'));
  global.blacklist = new Map(blacklistData);
- console.log(`📋 Blacklist carregada: ${global.blacklist.size} jogadores banidos`);
+ console.log(`💎 Blacklist carregada: ${global.blacklist.size} jogadores banidos`);
  }
 
  if (fs.existsSync('./data/historico.json')) {
@@ -123,15 +123,15 @@ try {
  const currentConfig = global.guildConfig.get(guildId) || {};
  global.guildConfig.set(guildId, { ...currentConfig, killboard: config });
  }
- console.log(`💀 Configurações do Killboard carregadas`);
+ console.log(`🏹 Configurações do Killboard carregadas`);
  }
 } catch (error) {
- console.error('❌ Erro ao carregar dados persistidos:', error);
+ console.error('❌ Erro ao carregar dados persistentes:', error);
 }
 
-// ==================== EVENTO READY ====================
+// ========== EVENTO READY ==========
 client.once(Events.ClientReady, async () => {
- console.log(`✅ Bot logado como ${client.user.tag}`);
+ console.log(`🔔 Bot logado como ${client.user.tag}`);
  console.log(`🤖 ID do Bot: ${client.user.id}`);
  console.log(`📅 Data de início: ${new Date().toLocaleString()}`);
 
@@ -139,11 +139,11 @@ client.once(Events.ClientReady, async () => {
  await Database.initialize();
  RegistrationActions.initialize();
  EventHandler.initialize();
- console.log('📝 Sistemas inicializados: Database + Registro + Eventos');
+ console.log('🔰 Sistemas inicializados: Database + Registro + Eventos');
 
- // 🛒 NOVO: Inicializar cache de itens do mercado
+ // 🆕 NOVO: Inicializar cache de itens do mercado
  try {
- console.log('🛒 Inicializando sistema de mercado...');
+ console.log('🆕 Inicializando sistema de mercado...');
  await MarketApi.loadItemsCache();
  } catch (error) {
  console.error('❌ Erro ao inicializar cache de mercado:', error);
@@ -157,12 +157,12 @@ client.once(Events.ClientReady, async () => {
  if (guild) {
  KillboardHandler.startPolling(guildId, config.killboard);
  killboardsIniciados++;
- console.log(`💀 Killboard iniciado para guild: ${guild.name}`);
+ console.log(`🏹 Killboard iniciado para guild: ${guild.name}`);
  }
  }
  }
  if (killboardsIniciados > 0) {
- console.log(`💀 Total de Killboards ativos: ${killboardsIniciados}`);
+ console.log(`🏹 Total de Killboards ativos: ${killboardsIniciados}`);
  }
  } catch (error) {
  console.error('❌ Erro ao iniciar killboards:', error);
@@ -191,13 +191,13 @@ client.once(Events.ClientReady, async () => {
  );
 
  console.log('✅ Comandos slash registrados com sucesso!');
- console.log(`📋 Total de comandos: ${commands.length}`);
+ console.log(`📊 Total de comandos: ${commands.length}`);
  } catch (error) {
  console.error('❌ Erro ao registrar comandos slash:', error);
  }
 });
 
-// ==================== VERIFICAÇÃO DE ENTRADA EM CALL DE EVENTO ====================
+// ========== VERIFICAÇÃO DE ENTRADA EM CALL DE EVENTO ==========
 client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
  try {
  if (!newState.channelId) return;
@@ -206,7 +206,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
  const member = newState.member;
  const channel = newState.channel;
 
- if (!channel.name.startsWith('⚔️-') && !channel.name.startsWith('🏰-')) return;
+ if (!channel.name.startsWith('📢-') && !channel.name.startsWith('🔊-')) return;
 
  let isParticipating = false;
  let eventData = null;
@@ -236,11 +236,15 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
  if (!isParticipating && eventData) {
  console.log(`[VoiceState] Usuário ${member.id} tentou entrar na call ${channel.id} sem participar do evento`);
 
+ // ✅ CORREÇÃO APLICADA AQUI: Verificar permissão MoveMembers antes de tentar mover
+ const botMember = newState.guild.members.me;
+ const canMoveMembers = botMember.permissions.has(PermissionFlagsBits.MoveMembers);
+
  const canalAguardando = newState.guild.channels.cache.find(
- c => c.name === '🔊╠Aguardando-Evento' && c.type === ChannelType.GuildVoice
+ c => c.name === '⏳Aguardando-Evento' && c.type === ChannelType.GuildVoice
  );
 
- if (canalAguardando) {
+ if (canalAguardando && canMoveMembers) {
  try {
  await member.voice.setChannel(canalAguardando.id);
  console.log(`[VoiceState] Movido ${member.id} para Aguardando-Evento`);
@@ -253,6 +257,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
  }
  }
  } else {
+ // Se não tem permissão ou canal não existe, apenas desconecta
  try {
  await member.voice.disconnect('Não está participando do evento');
  } catch (e) {
@@ -264,10 +269,10 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
  await member.send({
  embeds: [
  new EmbedBuilder()
- .setTitle('⚠️ Acesso Negado')
+ .setTitle('📢 Acesso Negado')
  .setDescription(
  `Você tentou entrar na call do evento **${eventData.nome}** sem estar na lista de participantes.\n\n` +
- `👉 Clique no botão **"✋ Entrar no Evento"** no canal <#${eventData.canalTextoId}> para participar primeiro!`
+ `📝 Clique no botão **"🎫 Entrar no Evento"** no canal <#${eventData.canalTextoId}> para participar primeiro!`
  )
  .setColor(0xE74C3C)
  .setTimestamp()
@@ -281,7 +286,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
  }
 });
 
-// ==================== HANDLER PRINCIPAL DE INTERAÇÕES ====================
+// ========== HANDLER PRINCIPAL DE INTERAÇÕES ==========
 client.on(Events.InteractionCreate, async interaction => {
  try {
  // COMANDOS SLASH
@@ -340,7 +345,7 @@ client.on(Events.InteractionCreate, async interaction => {
  if (customId === 'killboard_config') {
  const modal = new ModalBuilder()
  .setCustomId('modal_killboard_config')
- .setTitle('⚙️ Configurar Killboard')
+ .setTitle('🎮 Configurar Killboard')
  .addComponents(
  new ActionRowBuilder().addComponents(
  new TextInputBuilder()
@@ -359,7 +364,7 @@ client.on(Events.InteractionCreate, async interaction => {
 
  if (customId === 'killboard_test_kill' || customId === 'killboard_test_death') {
  await interaction.reply({
- content: '📤 Envio de teste em desenvolvimento...',
+ content: '🚧 Envio de teste em desenvolvimento...',
  ephemeral: true
  });
  return;
@@ -374,7 +379,7 @@ client.on(Events.InteractionCreate, async interaction => {
  return;
  }
 
- // 🛒 MERCADO ALBION - NOVO SISTEMA DE NAVEGAÇÃO
+ // 🆕 MERCADO ALBION - NOVO SISTEMA DE NAVEGAÇÃO
  if (customId === 'market_browse_category') {
  await MarketHandler.handleBrowseCategory(interaction);
  return;
@@ -438,8 +443,8 @@ client.on(Events.InteractionCreate, async interaction => {
  return;
  }
 
- if (customId.startsWith('aprovar_alianca_')) {
- const regId = customId.replace('aprovar_alianca_', '');
+ if (customId.startsWith('aprovar_aliança_')) {
+ const regId = customId.replace('aprovar_aliança_', '');
  await RegistrationActions.approveAsAlianca(interaction, regId);
  return;
  }
@@ -477,7 +482,7 @@ client.on(Events.InteractionCreate, async interaction => {
 
  if (customId === 'btn_gank' || customId === 'btn_cta') {
  await interaction.reply({
- content: '🔒 Este recurso estará disponível em breve!',
+ content: '🔧 Este recurso está disponível em breve!',
  ephemeral: true
  });
  return;
@@ -581,6 +586,12 @@ client.on(Events.InteractionCreate, async interaction => {
  return;
  }
 
+ if (customId.startsWith('loot_atualizar_part_')) {
+ const simulationId = customId.replace('loot_atualizar_part_', '');
+ await LootSplitHandler.handleAtualizarParticipacao(interaction, simulationId);
+ return;
+ }
+
  if (customId.startsWith('fin_aprovar_')) {
  const simulationId = customId.replace('fin_aprovar_', '');
  await LootSplitHandler.handleAprovacaoFinanceira(interaction, simulationId, true);
@@ -620,7 +631,7 @@ client.on(Events.InteractionCreate, async interaction => {
  return;
  }
 
- // 💵 NOVO SISTEMA DE DEPÓSITO - FLUXO DE SELEÇÃO DE USUÁRIOS
+ // 🆕 NOVO SISTEMA DE DEPÓSITO - FLUXO DE SELEÇÃO DE USUÁRIOS
  if (customId === 'dep_select_users') {
  await DepositHandler.openUserSelection(interaction);
  return;
@@ -671,7 +682,7 @@ client.on(Events.InteractionCreate, async interaction => {
 
  if (customId.startsWith('dep_verificar_')) {
  const comprovante = customId.replace('dep_verificar_', '');
- await interaction.reply({ content: `📎 **Comprovante:** ${comprovante}`, ephemeral: true });
+ await interaction.reply({ content: `✅ **Comprovante:** ${comprovante}`, ephemeral: true });
  return;
  }
 
@@ -854,12 +865,12 @@ client.on(Events.InteractionCreate, async interaction => {
  }
 
  if (customId === 'btn_eventos_exportar') {
- await interaction.reply({ content: '⏳ Exportação de dados em desenvolvimento...', ephemeral: true });
+ await interaction.reply({ content: '🔍 Exportação de dados em desenvolvimento...', ephemeral: true });
  return;
  }
 
  if (customId === 'btn_eventos_ajuda') {
- await interaction.reply({ content: '❓ **Painel de Eventos**\n\nUse os menus acima para filtrar eventos por período ou cargo.', ephemeral: true });
+ await interaction.reply({ content: '🔰 **Painel de Eventos**\n\nUse os menus acima para filtrar eventos por período ou cargo.', ephemeral: true });
  return;
  }
 
@@ -1011,7 +1022,7 @@ client.on(Events.InteractionCreate, async interaction => {
  return;
  }
 
- // 🛒 MERCADO - Navegação por Categoria
+ // 🆕 MERCADO - Navegação por Categoria
  if (interaction.customId.startsWith('market_select_category_')) {
  const searchId = interaction.customId.replace('market_select_category_', '');
  const category = interaction.values[0];
@@ -1066,7 +1077,7 @@ client.on(Events.InteractionCreate, async interaction => {
  return;
  }
 
- // 💵 NOVO: DEPÓSITO - Seleção de usuários
+ // 🆕 NOVO: DEPÓSITO - Seleção de usuários
  if (interaction.customId === 'dep_select_users_menu') {
  await DepositHandler.processUserSelection(interaction);
  return;
@@ -1077,15 +1088,15 @@ client.on(Events.InteractionCreate, async interaction => {
  if (interaction.isModalSubmit()) {
  if (interaction.customId === 'modal_registro') {
  const nick = interaction.fields.getTextInputValue('reg_nick').trim();
- const erros = await RegistrationActions.checkExistingRegistration(
+ const errors = await RegistrationActions.checkExistingRegistration(
  interaction.guild,
  interaction.user.id,
  nick
  );
 
- if (erros.length > 0) {
+ if (errors.length > 0) {
  await interaction.reply({
- content: `❌ **Não foi possível iniciar o registro:**\n\n${erros.join('\n')}`,
+ content: `❌ **Não foi possível iniciar o registro:**\n\n${errors.join('\n')}`,
  ephemeral: true
  });
  return;
@@ -1148,7 +1159,7 @@ client.on(Events.InteractionCreate, async interaction => {
  return;
  }
 
- // 💵 DEPÓSITO - Novo fluxo (valor normal, sem milhões)
+ // 🆕 DEPÓSITO - Novo fluxo (valor normal, sem milhões)
  if (interaction.customId === 'modal_deposito_valor') {
  await DepositHandler.processDeposito(interaction);
  return;
@@ -1183,7 +1194,7 @@ client.on(Events.InteractionCreate, async interaction => {
  try {
  const guildData = await KillboardHandler.setGuildId(interaction.guild.id, guildId);
  await interaction.editReply({
- content: `✅ **Killboard configurado!**\n\n🏰 Guilda: ${guildData.Name}\n📊 Monitoramento iniciado automaticamente.`
+ content: `✅ **Killboard configurado!**\n\n🔫 Guilda: ${guildData.Name}\n📊 Monitoramento iniciado automaticamente.`
  });
  } catch (error) {
  await interaction.editReply({
@@ -1234,7 +1245,7 @@ client.on(Events.InteractionCreate, async interaction => {
  return;
  }
 
- // 🛒 MERCADO - Busca Avançada
+ // 🆕 MERCADO - Busca Avançada
  if (interaction.customId === 'market_modal_search') {
  await MarketHandler.processSearchModal(interaction);
  return;
@@ -1275,7 +1286,7 @@ process.on('uncaughtException', error => {
 
 // Salvar dados antes de encerrar
 process.on('SIGINT', async () => {
- console.log('\n💾 Salvando dados antes de encerrar...');
+ console.log('\n🛑 Salvando dados antes de encerrar...');
  try {
  if (!fs.existsSync('./data')) {
  fs.mkdirSync('./data', { recursive: true });
@@ -1300,7 +1311,7 @@ process.on('SIGINT', async () => {
 });
 
 process.on('SIGTERM', async () => {
- console.log('\n💾 Salvando dados antes de encerrar (SIGTERM)...');
+ console.log('\n🛑 Salvando dados antes de encerrar (SIGTERM)...');
  try {
  if (!fs.existsSync('./data')) {
  fs.mkdirSync('./data', { recursive: true });
@@ -1326,7 +1337,7 @@ process.on('SIGTERM', async () => {
 
 // LOGIN DO BOT
 client.login(process.env.TOKEN).then(() => {
- console.log('🔐 Login realizado com sucesso');
+ console.log('🔑 Login realizado com sucesso');
 }).catch(error => {
  console.error('❌ Erro ao fazer login:', error);
  console.error('Verifique se o TOKEN no arquivo .env está correto.');

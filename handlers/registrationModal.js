@@ -20,7 +20,7 @@ class RegistrationModal {
 
     const nickInput = new TextInputBuilder()
       .setCustomId('reg_nick')
-      .setLabel('🎮 Seu Nick no Albion Online')
+      .setLabel('✍️ Seu Nick no Albion Online')
       .setPlaceholder('Ex: TTV_SeuNome')
       .setStyle(TextInputStyle.Short)
       .setRequired(true)
@@ -29,7 +29,7 @@ class RegistrationModal {
 
     const guildaInput = new TextInputBuilder()
       .setCustomId('reg_guilda')
-      .setLabel('🏰 Guilda Atual (ou "Nenhuma")')
+      .setLabel('🌐 Guilda Atual (ou "Nenhuma")')
       .setPlaceholder('Ex: MinhaGuilda ou Nenhuma')
       .setStyle(TextInputStyle.Short)
       .setRequired(true)
@@ -67,17 +67,17 @@ class RegistrationModal {
       .addOptions(
         new StringSelectMenuOptionBuilder()
           .setLabel('Américas')
-          .setDescription('Servidor Americas (US)')
+          .setDescription('Servidor Américas (US)')
           .setValue('americas')
           .setEmoji('🌎'),
         new StringSelectMenuOptionBuilder()
           .setLabel('Europa')
-          .setDescription('Servidor Europe (EU)')
+          .setDescription('Servidor Europa (EU)')
           .setValue('europe')
           .setEmoji('🌍'),
         new StringSelectMenuOptionBuilder()
           .setLabel('Ásia')
-          .setDescription('Servidor Asia')
+          .setDescription('Servidor Ásia')
           .setValue('asia')
           .setEmoji('🌏')
       );
@@ -104,7 +104,7 @@ class RegistrationModal {
           .setLabel('PC e Mobile')
           .setDescription('Joga em ambas as plataformas')
           .setValue('PC e Mobile')
-          .setEmoji('🖥️')
+          .setEmoji('💻📱')
       );
 
     return new ActionRowBuilder().addComponents(select);
@@ -238,15 +238,15 @@ class RegistrationModal {
       const { nick, guilda, arma, server, convidadoPor } = tempData;
 
       // NOVA LÓGICA: Verificação com tratamento de erro aprimorado
-      let verification = { valid: false, error: null, details: null, apiStatus: null };
+      let verificacao = { valid: false, error: null, details: null, apiStatus: null };
       let usarRegistroOffline = false;
       let apiError = false;
 
       try {
-        verification = await AlbionAPI.verifyPlayerGuild(nick, guilda, server);
+        verificacao = await AlbionAPI.verifyPlayerGuild(nick, guilda, server);
 
         // Se API retornar indisponível, usar modo offline
-        if (verification.apiStatus === 'API_UNAVAILABLE' || verification.apiStatus === 'ERROR') {
+        if (verificacao.apiStatus === 'API_UNAVAILABLE' || verificacao.apiStatus === 'ERROR') {
           usarRegistroOffline = true;
           apiError = true;
           console.log('⚠️ API indisponível ou erro, usando modo offline para registro');
@@ -256,16 +256,16 @@ class RegistrationModal {
         console.error('❌ Erro na API:', apiErr);
         usarRegistroOffline = true;
         apiError = true;
-        verification.error = 'API indisponível ou timeout';
-        verification.apiStatus = 'ERROR';
+        verificacao.error = 'API indisponível ou timeout';
+        verificacao.apiStatus = 'ERROR';
       }
 
       // Determinar se está validado (apenas se não for erro de API)
-      const apiVerified = verification.valid && !usarRegistroOffline;
+      const apiVerified = verificacao.valid && !usarRegistroOffline;
 
       if (!apiVerified && !usarRegistroOffline) {
         // API funcionou mas jogador não foi validado (nick errado, guilda errada, etc)
-        console.log(`⚠️ API não validou jogador "${nick}": ${verification.error}`);
+        console.log(`⚠️ API não validou jogador "${nick}": ${verificacao.error}`);
       }
 
       // Buscar histórico de recusas NO BANCO DE DADOS
@@ -289,10 +289,10 @@ class RegistrationModal {
           arma: arma,
           convidadoPor: convidadoPor
         },
-        albionData: verification.details || null,
+        albionData: verificacao.details || null,
         apiVerified: apiVerified,
         apiError: apiError,
-        apiStatus: verification.apiStatus,
+        apiStatus: verificacao.apiStatus,
         status: 'pendente',
         tentativasAnteriores: tentativasAnteriores,
         historicoRecusas: historico,
@@ -326,8 +326,8 @@ class RegistrationModal {
         .setTitle(apiVerified ? '✅ Registro Enviado!' : '⚠️ Registro Enviado (Verificação Manual)')
         .setDescription(mensagemSucesso)
         .addFields(
-          { name: '🎮 Nick', value: nick, inline: true },
-          { name: '🏰 Guilda', value: guilda || 'Nenhuma', inline: true },
+          { name: '✍️ Nick', value: nick, inline: true },
+          { name: '🌐 Guilda', value: guilda || 'Nenhuma', inline: true },
           { name: '🌍 Servidor', value: server, inline: true },
           { name: '💻 Plataforma', value: platform, inline: true },
           { name: '⚔️ Arma/Spec', value: arma, inline: false }
@@ -362,7 +362,7 @@ class RegistrationModal {
     try {
       const guild = interaction.guild;
       const canalSolicitacao = guild.channels.cache.find(
-        c => c.name === '📨╠solicitação-registro'
+        c => c.name === '📋solicitação-registro'
       );
 
       if (!canalSolicitacao) {
@@ -388,9 +388,9 @@ class RegistrationModal {
 
       if (registroData.apiError) {
         embedColor = 0xE74C3C; // Vermelho (erro API)
-        footerText = `ID: ${registroData.id} | 🔴 API Indisponível`;
+        footerText = `ID: ${registroData.id} | ⚠️ API Indisponível`;
         apiField = {
-          name: '🔴 ATENÇÃO - API INDISPONÍVEL',
+          name: '⚠️ ATENÇÃO - API INDISPONÍVEL',
           value: 'Não foi possível conectar à API do Albion. Verifique manualmente se o jogador existe antes de aprovar!',
           inline: false
         };
@@ -411,8 +411,8 @@ class RegistrationModal {
         .setThumbnail(interaction.user.displayAvatarURL({ dynamic: true }))
         .addFields(
           { name: '👤 Usuário Discord', value: `${interaction.user} (\`${interaction.user.id}\`)`, inline: false },
-          { name: '🎮 Nick no Albion', value: `\`${dados.nick}\``, inline: true },
-          { name: '🏰 Guilda Informada', value: dados.guilda || 'Nenhuma', inline: true },
+          { name: '✍️ Nick no Albion', value: `\`${dados.nick}\``, inline: true },
+          { name: '🌐 Guilda Informada', value: dados.guilda || 'Nenhuma', inline: true },
           { name: '🌍 Servidor', value: `${serverEmoji[dados.server]} ${dados.server.toUpperCase()}`, inline: true },
           { name: '💻 Plataforma', value: dados.platform, inline: true },
           { name: '⚔️ Arma/Spec', value: dados.arma, inline: false },
@@ -429,13 +429,15 @@ class RegistrationModal {
         });
       }
 
+      // ✅ CORREÇÃO APLICADA AQUI: Verificação de segurança para historicoRecusas
       if (registroData.tentativasAnteriores > 0) {
-        const ultimasRecusas = registroData.historicoRecusas.slice(-3).map((h, i) =>
+        // CORREÇÃO: Usar optional chaining e valor padrão vazio
+        const ultimasRecusas = (registroData.historicoRecusas || []).slice(-3).map((h, i) =>
           `${i + 1}. ${h.motivo} (${new Date(h.data).toLocaleDateString()})`
         ).join('\n');
 
         embed.addFields({
-          name: `📜 Histórico de Recusas (${registroData.tentativasAnteriores} tentativa(s))`,
+          name: `📝 Histórico de Recusas (${registroData.tentativasAnteriores} tentativa(s))`,
           value: ultimasRecusas || 'Ver histórico completo',
           inline: false
         });
@@ -452,12 +454,12 @@ class RegistrationModal {
           .setLabel('✅ Membro')
           .setStyle(ButtonStyle.Success),
         new ButtonBuilder()
-          .setCustomId(`aprovar_alianca_${registroData.id}`)
-          .setLabel('🤝 Aliança')
+          .setCustomId(`aprovar_aliança_${registroData.id}`)
+          .setLabel('🙅 Aliança')
           .setStyle(ButtonStyle.Primary),
         new ButtonBuilder()
           .setCustomId(`aprovar_convidado_${registroData.id}`)
-          .setLabel('👋 Convidado')
+          .setLabel('👥 Convidado')
           .setStyle(ButtonStyle.Secondary),
         new ButtonBuilder()
           .setCustomId(`recusar_registro_${registroData.id}`)
@@ -485,7 +487,7 @@ class RegistrationModal {
       const admMention = admRole ? `<@&${admRole.id}>` : '@ADM';
 
       const msg = await canalSolicitacao.send({
-        content: `📢 ${recrutadorMention} ${admMention} Nova solicitação de registro!`,
+        content: `🔔 ${recrutadorMention} ${admMention} Nova solicitação de registro!`,
         embeds: [embed],
         components: components
       });
