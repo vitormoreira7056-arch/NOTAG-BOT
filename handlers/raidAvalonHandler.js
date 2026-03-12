@@ -1,16 +1,34 @@
-const {
-  EmbedBuilder,
-  ActionRowBuilder,
-  ButtonBuilder,
+/**
+ * raidAvalonHandler.js - Handler para Raid Avalon
+ * 
+ * VERSÃO CORRIGIDA - Timezone UTC Consistente
+ * Compatível com database.js (timezone UTC)
+ * 
+ * CORREÇÕES CRÍTICAS:
+ * 1. processClassLimit: Não usa mais interaction.update() após modal 
+ *    (usamos reply + edit via channel/message fetch)
+ * 2. Todos os timestamps via Database.getCurrentTimestamp() (UTC ms)
+ * 3. Validação de permissões multi-servidor (guildId checks)
+ * 4. Tratamento de erros em operações de canal
+ */
+
+const { 
+  EmbedBuilder, 
+  ActionRowBuilder, 
+  ButtonBuilder, 
   ButtonStyle,
   StringSelectMenuBuilder,
   StringSelectMenuOptionBuilder,
   PermissionFlagsBits,
-  ChannelType
+  ChannelType,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle
 } = require('discord.js');
+const Database = require('./database.js');
 
 /**
- * Handler para Raid Avalon - Versão Multi-Servidor
+ * Handler para Raid Avalon - Versão Multi-Servidor (Timezone UTC)
  * Sistema de Classes e Armas
  */
 class RaidAvalonHandler {
@@ -51,17 +69,26 @@ class RaidAvalonHandler {
   }
 
   /**
+   * Gera timestamp UTC via Database
+   */
+  getTimestamp() {
+    return Database.getCurrentTimestamp();
+  }
+
+  /**
    * Cria o modal de configuração de classes (após o modal inicial)
    */
   static async showClassConfigModal(interaction, raidData) {
     try {
       const guildId = interaction.guild.id;
+      const handler = new RaidAvalonHandler();
 
       // Armazenar dados temporários com guildId
       if (!global.raidTemp) global.raidTemp = new Map();
       global.raidTemp.set(interaction.user.id, {
         ...raidData,
-        guildId: guildId
+        guildId: guildId,
+        timestamp: handler.getTimestamp()
       });
 
       // Criar embed de configuração
@@ -75,7 +102,7 @@ class RaidAvalonHandler {
           `Clique nos botões abaixo para configurar cada classe:`
         )
         .setColor(0x9B59B6)
-        .setTimestamp();
+        .setTimestamp(handler.getTimestamp());
 
       // Botões para configurar cada classe
       const rows = [];
@@ -173,8 +200,6 @@ class RaidAvalonHandler {
         scout: 'Scout'
       };
 
-      const { ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder } = require('discord.js');
-
       const modal = new ModalBuilder()
         .setCustomId(`raid_limit_${classKey}`)
         .setTitle(`Configurar ${classNames[classKey]}`);
@@ -202,9 +227,16 @@ class RaidAvalonHandler {
 
   /**
    * Processa o limite de uma classe
+   * CRITICAL FIX: Não usa interaction.update() após modal submission
+   * Modais não têm acesso à mensagem original (interaction.message é null)
+   * Usamos interaction.reply() e tentamos editar a mensagem via canal
    */
   static async processClassLimit(interaction, classKey) {
+    const handler = new RaidAvalonHandler();
+
     try {
+      console.log(`[processClassLimit] Processando limite para classe ${classKey}`);
+
       const limite = parseInt(interaction.fields.getTextInputValue('limite_classe')) || 0;
 
       const raidData = global.raidTemp?.get(interaction.user.id);
@@ -223,20 +255,67 @@ class RaidAvalonHandler {
 
       global.raidTemp.set(interaction.user.id, raidData);
 
-      // Atualizar mensagem com novas configurações
-      const configEmbed = await this.createConfigPreviewEmbed(raidData);
-
-      await interaction.update({
-        embeds: [interaction.message.embeds[0], configEmbed],
-        components: interaction.message.components
+      // CRITICAL FIX: Após modal submission, interaction.message é null
+      // Não podemos usar interaction.update(), devemos usar reply()
+      await interaction.reply({
+        content: `✅ Limite de **${classKey.toUpperCase()}** configurado: ${limite > 0 ? limite + ' vagas' : 'Ilimitado'}`,
+        ephemeral: true
       });
+
+      // Tentar atualizar a mensagem de configuração original
+      // Como não temos referência direta, buscamos no canal as mensagens recentes do bot
+      try {
+        // Se tivermos a referência do canal da interação original, buscamos lá
+        const channel = interaction.channel;
+        if (channel) {
+          // Buscar as últimas mensagens do bot (últimos 10)
+          const messages = await channel.messages.fetch({ limit: 10 });
+
+          // Procurar uma mensagem ephemeral do bot para este usuário com embed de configuração
+          const botMessages = messages.filter(m => 
+            m.author.id === interaction.client.user.id && 
+            m.embeds.length > 0 &&
+            m.embeds[0].title?.includes('Configurar Classes')
+          );
+
+          if (botMessages.size > 0) {
+            // Pegar a mais recente
+            const msgToEdit = botMessages.first();
+
+            // Recriar os embeds atualizados
+            const mainEmbed = msgToEdit.embeds[0]; // Mantém o primeiro embed (instruções)
+            const configEmbed = await this.createConfigPreviewEmbed(raidData);
+
+            // Atualizar apenas o segundo embed (configurações)
+            await msgToEdit.edit({
+              embeds: [mainEmbed, configEmbed],
+              components: msgToEdit.components
+            });
+
+            console.log(`[processClassLimit] Mensagem de config atualizada: ${msgToEdit.id}`);
+          } else {
+            // Se não achou mensagem para editar, envia followUp com preview atualizado
+            const configEmbed = await this.createConfigPreviewEmbed(raidData);
+            await interaction.followUp({
+              content: '📋 **Configuração Atualizada:**',
+              embeds: [configEmbed],
+              ephemeral: true
+            });
+          }
+        }
+      } catch (updateError) {
+        console.log('[processClassLimit] Não foi possível atualizar preview visual:', updateError.message);
+        // Não é crítico, o usuário já recebeu confirmação do limite configurado
+      }
+
+      console.log(`[processClassLimit] Classe ${classKey} configurada com limite ${limite}`);
 
     } catch (error) {
       console.error('[RaidAvalon] Error processing class limit:', error);
       await interaction.reply({
         content: '❌ Erro ao salvar configuração.',
         ephemeral: true
-      });
+      }).catch(console.error);
     }
   }
 
@@ -244,6 +323,8 @@ class RaidAvalonHandler {
    * Cria a raid final
    */
   static async createRaid(interaction) {
+    const handler = new RaidAvalonHandler();
+
     try {
       const guildId = interaction.guild.id;
       const raidData = global.raidTemp?.get(interaction.user.id);
@@ -258,7 +339,7 @@ class RaidAvalonHandler {
       await interaction.deferReply({ ephemeral: true });
 
       const guild = interaction.guild;
-      const eventId = `raid_${Date.now()}_${interaction.user.id}`;
+      const eventId = `raid_${handler.getTimestamp()}_${interaction.user.id}`;
 
       // Criar canal de voz
       const categoriaAtivos = guild.channels.cache.find(
@@ -309,7 +390,7 @@ class RaidAvalonHandler {
 
       // Completar dados da raid
       raidData.id = eventId;
-      raidData.guildId = guildId; // ✅ guildId para multi-servidor
+      raidData.guildId = guildId;
       raidData.criadorId = interaction.user.id;
       raidData.criadorTag = interaction.user.tag;
       raidData.canalVozId = canalVoz.id;
@@ -317,6 +398,7 @@ class RaidAvalonHandler {
       raidData.status = 'aguardando';
       raidData.messageId = null;
       raidData.tipo = 'raid_avalon';
+      raidData.createdAt = handler.getTimestamp();
 
       // Inicializar classes se não configuradas
       if (!raidData.classes) {
@@ -365,6 +447,13 @@ class RaidAvalonHandler {
         content: `✅ **Raid Avalon criada com sucesso!**\n\n🏰 **${raidData.nome}**\n🕐 ${raidData.horario}\n🔊 Canal: <#${canalVoz.id}>`
       });
 
+      // Log de auditoria
+      await Database.logAudit(guildId, 'RAID_AVALON_CREATED', interaction.user.id, {
+        eventId,
+        nome: raidData.nome,
+        timestamp: handler.getTimestamp()
+      });
+
       console.log(`🏰 Raid Avalon criada: ${raidData.nome} por ${interaction.user.tag} (Guild: ${guildId})`);
 
     } catch (error) {
@@ -400,6 +489,7 @@ class RaidAvalonHandler {
    * Cria embed da raid
    */
   static createRaidEmbed(raidData) {
+    const handler = new RaidAvalonHandler();
     const statusEmojis = {
       'aguardando': '⏳',
       'em_andamento': '🔴',
@@ -431,7 +521,7 @@ class RaidAvalonHandler {
     const embed = new EmbedBuilder()
       .setTitle(`${statusEmojis[raidData.status] || '⏳'} 🏰 RAID AVALON ┃ ${raidData.nome}`)
       .setDescription(
-        `\> ${raidData.descricao}\n\n` +
+        `\\> ${raidData.descricao}\n\n` +
         `**👤 Criador:** <@${raidData.criadorId}>\n` +
         `**🕐 Horário:** \`${raidData.horario}\`\n` +
         `**📊 Status:** ${raidData.status === 'aguardando' ? 'Aguardando' : 'Em Andamento'}\n` +
@@ -448,7 +538,7 @@ class RaidAvalonHandler {
         text: `ID: ${raidData.id} • Selecione sua classe abaixo`,
         iconURL: 'https://i.imgur.com/5K9Q5ZK.png'
       })
-      .setTimestamp();
+      .setTimestamp(handler.getTimestamp());
 
     return embed;
   }
@@ -610,6 +700,8 @@ class RaidAvalonHandler {
    * Processa seleção de arma e adiciona participante
    */
   static async processWeaponSelect(interaction, raidId, classKey, weaponKey) {
+    const handler = new RaidAvalonHandler();
+
     try {
       const guildId = interaction.guild.id;
       const raidData = global.activeRaids?.get(raidId);
@@ -631,6 +723,7 @@ class RaidAvalonHandler {
 
       const armaNome = this.getArmaNomeByKey(weaponKey);
       const member = interaction.member;
+      const now = handler.getTimestamp();
 
       // Adicionar participante
       if (!raidData.classes[classKey].participantes) {
@@ -642,7 +735,7 @@ class RaidAvalonHandler {
         nick: member.nickname || member.user.username,
         arma: armaNome,
         classe: classKey,
-        joinedAt: Date.now()
+        joinedAt: now
       });
 
       // Atualizar também no activeEvents para compatibilidade
@@ -666,6 +759,14 @@ class RaidAvalonHandler {
       await interaction.reply({
         content: `✅ **Você entrou na raid como ${classKey.toUpperCase()}!**\n\n⚔️ **Arma:** ${armaNome}`,
         ephemeral: true
+      });
+
+      // Log de auditoria
+      await Database.logAudit(guildId, 'RAID_JOIN', member.id, {
+        eventId: raidId,
+        classe: classKey,
+        arma: armaNome,
+        timestamp: now
       });
 
     } catch (error) {
@@ -757,6 +858,8 @@ class RaidAvalonHandler {
    * Handlers para botões de controle
    */
   static async handleIniciar(interaction, raidId) {
+    const handler = new RaidAvalonHandler();
+
     try {
       const guildId = interaction.guild.id;
       const raidData = global.activeRaids?.get(raidId);
@@ -783,8 +886,9 @@ class RaidAvalonHandler {
         });
       }
 
+      const now = handler.getTimestamp();
       raidData.status = 'em_andamento';
-      raidData.inicioTimestamp = Date.now();
+      raidData.inicioTimestamp = now;
 
       // MOVER TODOS OS PARTICIPANTES PARA O CANAL DE VOZ
       const canalVoz = interaction.guild.channels.cache.get(raidData.canalVozId);
@@ -826,10 +930,16 @@ class RaidAvalonHandler {
       const eventData = global.activeEvents.get(raidId);
       if (eventData) {
         eventData.status = 'em_andamento';
-        eventData.inicioTimestamp = Date.now();
+        eventData.inicioTimestamp = now;
       }
 
       await this.updateRaidPanel(interaction, raidData);
+
+      // Log de auditoria
+      await Database.logAudit(guildId, 'RAID_STARTED', interaction.user.id, {
+        eventId: raidId,
+        timestamp: now
+      });
 
       await interaction.reply({
         content: '🚀 **Raid iniciada!** Todos os participantes foram movidos para o canal de voz!',
@@ -843,6 +953,8 @@ class RaidAvalonHandler {
   }
 
   static async handleFinalizar(interaction, raidId) {
+    const handler = new RaidAvalonHandler();
+
     try {
       const guildId = interaction.guild.id;
       const raidData = global.activeRaids?.get(raidId);
@@ -869,12 +981,13 @@ class RaidAvalonHandler {
         });
       }
 
+      const now = handler.getTimestamp();
       raidData.status = 'encerrado';
-      raidData.finalizadoEm = Date.now();
+      raidData.finalizadoEm = now;
 
       // Calcular tempo de participação para todos
       if (raidData.inicioTimestamp) {
-        const tempoTotal = Date.now() - raidData.inicioTimestamp;
+        const tempoTotal = now - raidData.inicioTimestamp;
         for (const classe of Object.values(raidData.classes || {})) {
           for (const participante of classe.participantes || []) {
             participante.tempoTotal = tempoTotal;
@@ -932,16 +1045,23 @@ class RaidAvalonHandler {
         }
       }
 
-      // ✅ Garantir guildId ao salvar em finishedEvents
+      // Garantir guildId ao salvar em finishedEvents
       global.finishedEvents.set(raidId, {
         ...raidData,
-        guildId: raidData.guildId || guildId, // Garantir guildId
+        guildId: raidData.guildId || guildId,
         participantes: participantesMap,
-        finalizadoEm: Date.now()
+        finalizadoEm: now
       });
 
       global.activeRaids.delete(raidId);
       global.activeEvents.delete(raidId);
+
+      // Log de auditoria
+      await Database.logAudit(guildId, 'RAID_ENDED', interaction.user.id, {
+        eventId: raidId,
+        duration: raidData.inicioTimestamp ? (now - raidData.inicioTimestamp) : 0,
+        timestamp: now
+      });
 
       await interaction.reply({
         content: '✅ **Raid finalizada com sucesso!**\n💰 Use o botão "Simular Evento" no canal de eventos encerrados para calcular o loot.',
@@ -955,6 +1075,8 @@ class RaidAvalonHandler {
   }
 
   static async handleCancelar(interaction, raidId) {
+    const handler = new RaidAvalonHandler();
+
     try {
       const guildId = interaction.guild.id;
       const raidData = global.activeRaids?.get(raidId);
@@ -995,6 +1117,12 @@ class RaidAvalonHandler {
       global.activeRaids.delete(raidId);
       global.activeEvents.delete(raidId);
 
+      // Log de auditoria
+      await Database.logAudit(guildId, 'RAID_CANCELLED', interaction.user.id, {
+        eventId: raidId,
+        timestamp: handler.getTimestamp()
+      });
+
       await interaction.reply({
         content: '🗑️ **Raid cancelada!**',
         ephemeral: true
@@ -1009,6 +1137,7 @@ class RaidAvalonHandler {
   static async createFinishedRaidSummary(interaction, raidData) {
     try {
       const guildId = interaction.guild.id;
+      const handler = new RaidAvalonHandler();
 
       // Verificar se é do mesmo servidor
       if (raidData.guildId && raidData.guildId !== guildId) {
@@ -1026,7 +1155,7 @@ class RaidAvalonHandler {
       }
 
       // Buscar taxa da guilda
-      const config = global.guildConfig?.get(guildId) || {};
+      const config = await Database.getGuildConfig(guildId);
       const taxaGuilda = config.taxaGuilda || 10;
 
       // Calcular tempo total
@@ -1059,7 +1188,7 @@ class RaidAvalonHandler {
           `**Participantes por Classe:**\n${resumo}`
         )
         .setColor(0x2ECC71)
-        .setTimestamp();
+        .setTimestamp(handler.getTimestamp());
 
       // Criar botão de lootsplit igual ao do evento normal
       const botoes = new ActionRowBuilder()
